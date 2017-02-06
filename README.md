@@ -57,7 +57,7 @@ daccord is the main consensus computation program. It requires the name of an LA
 
 	daccord reads.las reads.db
 
-Please set DAZZ_DB (https://github.com/thegenemyers/DAZZ_DB) for creating Dazzler databases and
+Please see DAZZ_DB (https://github.com/thegenemyers/DAZZ_DB) for creating Dazzler databases and
 DALIGNER (https://github.com/thegenemyers/DALIGNER) for creating LAS alignment files.
 
 daccord has a set of optional parameters which can be set on the command line:
