@@ -42,3 +42,7 @@ src/sortfasta
 src/mapconstoraw
 src/fillfasta
 src/canutolas
+data
+src/spikenoise
+check.sh
+prepare.sh
