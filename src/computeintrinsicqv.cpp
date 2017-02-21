@@ -134,7 +134,9 @@ int main(int argc, char *argv[])
 		std::vector<uint64_t> RL;
 		DB.getAllReadLengths(RL);
 
-		int64_t const tspace = libmaus2::dazzler::align::AlignmentFile::getTSpace(arg.restargs);
+		int64_t const tspace = libmaus2::dazzler::align::AlignmentFile::getTSpace(
+			std::vector<std::string>(arg.restargs.begin()+1,arg.restargs.end())
+		);
 
 		for ( uint64_t a = 1; a < arg.size(); ++a )
 		{
