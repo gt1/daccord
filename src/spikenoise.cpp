@@ -62,7 +62,7 @@ int spikenoise(libmaus2::util::ArgParser const & arg)
 	{
 		// output unmodified sequence
 		std::cout << pattern;
-		
+
 		// compute modified sequence + operations applied
 		std::pair<std::string,std::string> const P = libmaus2::random::DNABaseNoiseSpiker::modifyAndComment(pattern.spattern,substrate,insrate,delrate,0.0 /* homopol */,erate,eratestddev);
 
@@ -70,7 +70,7 @@ int spikenoise(libmaus2::util::ArgParser const & arg)
 		pattern.sid = P.second;
 		pattern.spattern = P.first;
 		pattern.pattern = pattern.spattern.c_str();
-		
+
 		// output modified sequence
 		std::cout << pattern;
 	}
