@@ -60,6 +60,12 @@
 #include <libmaus2/lcs/NP.hpp>
 #endif
 
+std::string getTmpFileBase(libmaus2::util::ArgParser const & arg)
+{
+	std::string const tmpfilebase = arg.uniqueArgPresent("T") ? arg["T"] : libmaus2::util::ArgInfo::getDefaultTmpFileName(arg.progname);
+	return tmpfilebase;
+}
+
 typedef libmaus2::lcs::AlignmentTraceContainer trace_type;
 
 struct TraceTypeInfo
@@ -359,7 +365,7 @@ static std::string formatRHS(std::string const & description, default_type def)
  -t : default number of logical cores, threads
  */
 
-static std::string helpMessage(libmaus2::util::ArgParser const & /* arg */)
+static std::string helpMessage(libmaus2::util::ArgParser const & arg)
 {
 	std::vector < std::pair < std::string, std::string > > optionMap;
 	optionMap . push_back ( std::pair < std::string, std::string >("t", formatRHS("number of threads",getDefaultNumThreads())));
@@ -376,6 +382,7 @@ static std::string helpMessage(libmaus2::util::ArgParser const & /* arg */)
 	optionMap . push_back ( std::pair < std::string, std::string >("l", formatRHS("minimum length of output",getDefaultMinLen())));
 	optionMap . push_back ( std::pair < std::string, std::string >("minfilterfreq", formatRHS("minimum k-mer filter frequency",getDefaultMinFilterFreq())));
 	optionMap . push_back ( std::pair < std::string, std::string >("maxfilterfreq", formatRHS("maximum k-mer filter frequency",getDefaultMaxFilterFreq())));
+	optionMap . push_back ( std::pair < std::string, std::string >("T", formatRHS("temporary file prefix",libmaus2::util::ArgInfo::getDefaultTmpFileName(arg.progname))));
 
 	uint64_t maxlhs = 0;
 	for ( std::vector < std::pair < std::string, std::string > >::const_iterator ita = optionMap.begin(); ita != optionMap.end(); ++ita )
@@ -7553,7 +7560,8 @@ int daccord(
 	}
 
 	std::string const eproffn = arg.uniqueArgPresent("E") ? arg["E"] : (lasfn + ".eprof");
-	std::string const eproffntmp = eproffn + ".tmp";
+	std::string const tmpfilebase = getTmpFileBase(arg);
+	std::string const eproffntmp = tmpfilebase + "_eprof.tmp";
 	libmaus2::util::TempFileRemovalContainer::addTempFile(eproffntmp);
 	libmaus2::lcs::AlignmentStatistics GAS;
 
