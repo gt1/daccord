@@ -60,6 +60,36 @@ if test "${debug}" = "yes" ; then
         CFLAGS="${CFLAGS} ${CDEBUGFLAGS}"
 	openmp="no"
 
+	AC_LANG_PUSH([C++])
+	CXXFLAGS_SAVE="${CXXFLAGS}"
+	CXXFLAGS="-fsanitize=address"
+	AC_MSG_CHECKING([whether the C++ compiler supports the -fsanitize=address flag])
+	AC_TRY_COMPILE([],[],[sanitizeaddress=yes],[sanitizeaddress=no])
+	AC_MSG_RESULT([${sanitizeaddress}])
+	CXXFLAGS="${CXXFLAGS_SAVE}"
+	AC_LANG_POP
+
+	if test "${sanitizeaddress}" = "yes" ; then
+		CXXFLAGS="${CXXFLAGS} -fsanitize=address"
+		CFLAGS="${CFLAGS} -fsanitize=address"
+	fi
+
+	AC_LANG_PUSH([C++])
+	CXXFLAGS_SAVE="${CXXFLAGS}"
+	CXXFLAGS="-fstack-protector"
+	AC_MSG_CHECKING([whether the C++ compiler supports the -fstack-protector flag])
+	AC_TRY_COMPILE([],[],[stackprotect=yes],[stackprotect=no])
+	AC_MSG_RESULT([${stackprotect}])
+	CXXFLAGS="${CXXFLAGS_SAVE}"
+	AC_LANG_POP
+
+	if test "${stackprotect}" = "yes" ; then
+		STACKPROTECT="-fstack-protector"
+		CXXFLAGS="${CXXFLAGS} ${STACKPROTECT}"
+		CFLAGS="${CFLAGS} ${STACKPROTECT}"
+	fi
+
+
 	AC_MSG_NOTICE([Adding debug options ${CDEBUGFLAGS} to C compiler ${CC} flags, full list now ${CFLAGS}])
 	AC_MSG_NOTICE([Adding debug options ${CXXDEBUGFLAGS} to C compiler ${CXX} flags, full list now ${CXXFLAGS}])
 else
