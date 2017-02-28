@@ -7956,7 +7956,8 @@ int daccord(
 		uint64_t f = 0;
 		while ( pdec->getNextOverlap(OVL) )
 		{
-			uint64_t const score = OVL.path.aepos - OVL.path.abpos;
+			uint64_t const score =
+				static_cast<uint64_t>(ldexp((static_cast<double>(OVL.path.diffs) / static_cast<double>(OVL.path.aepos - OVL.path.abpos)),30));
 
 			if ( RH.full() )
 			{
