@@ -19,6 +19,7 @@
 #include <libmaus2/fastx/StreamFastAReader.hpp>
 #include <libmaus2/random/DNABaseNoiseSpiker.hpp>
 #include <libmaus2/util/ArgParser.hpp>
+#include <sys/time.h>
 #include <config.h>
 
 static double getDefaultSubstRate()
@@ -48,11 +49,16 @@ static double getDefaultErrorRateStdDev()
 
 int spikenoise(libmaus2::util::ArgParser const & arg)
 {
+	struct timeval tv;
+	gettimeofday(&tv,NULL);
+	libmaus2::random::Random::setup(static_cast<time_t>((static_cast<uint64_t>(tv.tv_sec) ^ static_cast<uint64_t>(tv.tv_usec))));
+
 	double const substrate = arg.uniqueArgPresent("s") ? arg.getParsedArg<double>("s") : getDefaultSubstRate();
 	double const insrate = arg.uniqueArgPresent("i") ? arg.getParsedArg<double>("i") : getDefaultInsRate();
 	double const delrate = arg.uniqueArgPresent("d") ? arg.getParsedArg<double>("d") : getDefaultDelRate();
 	double const erate = arg.uniqueArgPresent("e") ? arg.getParsedArg<double>("e") : getDefaultErrorRate();
 	double const eratestddev = arg.uniqueArgPresent("stddev") ? arg.getParsedArg<double>("stddev") : getDefaultErrorRateStdDev();
+	bool const omitoriginal = arg.uniqueArgPresent("omitoriginal");
 
 	libmaus2::fastx::StreamFastAReaderWrapper SFAR(std::cin);
 	libmaus2::fastx::StreamFastAReaderWrapper::pattern_type pattern;
@@ -60,8 +66,11 @@ int spikenoise(libmaus2::util::ArgParser const & arg)
 	// read sequence
 	while ( SFAR.getNextPatternUnlocked(pattern) )
 	{
-		// output unmodified sequence
-		std::cout << pattern;
+		if ( ! omitoriginal )
+		{
+			// output unmodified sequence
+			std::cout << pattern;
+		}
 
 		// compute modified sequence + operations applied
 		std::pair<std::string,std::string> const P = libmaus2::random::DNABaseNoiseSpiker::modifyAndComment(pattern.spattern,substrate,insrate,delrate,0.0 /* homopol */,erate,eratestddev);
