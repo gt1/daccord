@@ -1,3 +1,9 @@
+daccord (0.0.5-1) unstable; urgency=medium
+
+  * update alignment scoring for input heap
+
+ -- German Tischler <tischler@mpi-cbg.de>  Tue, 28 Feb 2017 15:07:33 +0100
+
 daccord (0.0.4-1) unstable; urgency=medium
 
   * change name of fasta index file in checkconsensus so it does not collide with other filenames    
