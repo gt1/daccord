@@ -690,7 +690,7 @@ static uint64_t const fastaindexmod = 64;
 
 static std::string getFastAIndexFileName(std::string const & consfn)
 {
-	std::string const consfnindex = consfn + ".index";
+	std::string const consfnindex = consfn + ".checkconsensus.index";
 	return consfnindex;
 }
 
