@@ -509,10 +509,24 @@ fillfasta
 fillfasta processes two sorted FastA files and computes their union such that the second file takes precedence (i.e. if a read name
 is present in both files, then the data from the second file will be kept and the one from the first one discarded).
 The read names contained in the second file need to be a subset of the read names found in the first file.
-The read names in both files need to follow the schem
+The read names in both files need to follow the scheme
 
 	read_{id}
 
 where {id} is a numerical id. A valid example would be
 
 	read_5
+
+computeextrinsicqv
+------------------
+
+computeextrinsicqv produces a Dazzler database track providing the edit
+distance between a source read and the consensus produced for that read
+for each block of size tspace on the source read. It has three mandatory and
+one optional argument. The mandatory arguments are a reads file in FastA
+format, a consensus file (as produced by daccord) in FastA format and the
+name of a Dazzler database (.db/.dam) file. The fourth and optional argument
+can be used to provide a Dazzler block number in case the two FastA files
+represent a block of the database used. A valid example would be
+
+	computeextrinsicqv data_fcgr/reads.fasta data_fcgr/reads_cons.fasta data_fcgr/reads.dam
