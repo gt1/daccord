@@ -9,7 +9,7 @@ man_MANS = ${MANPAGES}
 EXTRA_DIST = ${MANPAGES}
 
 bin_PROGRAMS = daccord computeintrinsicqv lasdetectsimplerepeats lasfilteralignments lasfilteralignmentsborderrepeats maftobam generateperfectpiles bamidrename \
-	checklas checkconsensus sortfasta mapconstoraw fillfasta canutolas spikenoise
+	checklas checkconsensus sortfasta mapconstoraw fillfasta canutolas spikenoise computeextrinsicqv
 
 daccord_SOURCES = daccord.cpp
 daccord_LDADD = ${LIBMAUS2LIBS}
@@ -85,3 +85,8 @@ spikenoise_SOURCES = spikenoise.cpp
 spikenoise_LDADD = ${LIBMAUS2LIBS}
 spikenoise_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
 spikenoise_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+computeextrinsicqv_SOURCES = computeextrinsicqv.cpp
+computeextrinsicqv_LDADD = ${LIBMAUS2LIBS}
+computeextrinsicqv_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+computeextrinsicqv_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
