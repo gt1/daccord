@@ -28,6 +28,7 @@
 #include <libmaus2/bambam/parallel/FragmentAlignmentBufferFragment.hpp>
 #include <libmaus2/dazzler/db/DatabaseFile.hpp>
 #include <libmaus2/lcs/NP.hpp>
+#include <libmaus2/lcs/NPL.hpp>
 #include <libmaus2/lcs/AlignmentPrint.hpp>
 #include <libmaus2/parallel/NumCpus.hpp>
 #include <libmaus2/dazzler/align/SortingOverlapOutputBuffer.hpp>
@@ -186,6 +187,194 @@ int64_t getId(std::string const & readname)
 	}
 
 	return -1;
+}
+
+void complete(
+	libmaus2::bambam::BamAlignment const & algnA,
+	libmaus2::bambam::BamAlignment const & algnB,
+	libmaus2::lcs::AlignmentTraceContainer & ATC,
+	int64_t & abpos,
+	int64_t & aepos,
+	int64_t & bbpos,
+	int64_t & bepos
+)
+{
+	std::string a = algnA.getRead();
+	std::string b = algnB.getRead();
+
+	bool reva = algnA.isReverse();
+	bool revb = algnB.isReverse();
+	bool const swap = reva;
+
+	int64_t afrontclip = algnA.getFrontSoftClipping();
+	int64_t abackclip = algnA.getBackSoftClipping();
+	int64_t bfrontclip = algnB.getFrontSoftClipping();
+	int64_t bbackclip = algnB.getBackSoftClipping();
+
+	if ( swap )
+	{
+		reva = ! reva;
+		revb = ! revb;
+		std::reverse(ATC.ta,ATC.te);
+
+		int64_t const nabpos = algnA.getLseq() - aepos;
+		int64_t const naepos = algnA.getLseq() - abpos;
+		int64_t const nbbpos = algnB.getLseq() - bepos;
+		int64_t const nbepos = algnB.getLseq() - bbpos;
+
+		assert ( nabpos >= 0 );
+		assert ( naepos >= nabpos );
+		assert ( naepos <= algnA.getLseq() );
+
+		assert ( nbbpos >= 0 );
+		assert ( nbepos >= nbbpos );
+		assert ( nbepos <= algnB.getLseq() );
+
+		abpos = nabpos;
+		aepos = naepos;
+		bbpos = nbbpos;
+		bepos = nbepos;
+
+		a = libmaus2::fastx::reverseComplementUnmapped(a);
+		b = libmaus2::fastx::reverseComplementUnmapped(b);
+
+		std::swap(afrontclip,abackclip);
+		std::swap(bfrontclip,bbackclip);
+	}
+
+	std::string const origb = algnB.isReverse() ? algnB.getReadRC() : algnB.getRead();
+
+	assert (  origb == (revb ? libmaus2::fastx::reverseComplementUnmapped(b) : b) );
+
+	#if 0
+	libmaus2::lcs::AlignmentPrint::printAlignmentLines(
+		std::cerr,
+		a.begin() + abpos,
+		aepos-abpos,
+		b.begin() + bbpos,
+		bepos-bbpos,
+		80,
+		ATC.ta,
+		ATC.te
+	);
+	#endif
+
+	assert (
+		libmaus2::lcs::AlignmentTraceContainer::checkAlignment(
+			ATC.ta,
+			ATC.te,
+			a.begin() + abpos,
+			b.begin() + bbpos
+		)
+	);
+
+	if ( abpos > afrontclip && bbpos > bfrontclip )
+	{
+		std::string fa = a.substr(afrontclip,abpos-afrontclip);
+		std::string fb = b.substr(bfrontclip,bbpos-bfrontclip);
+
+		std::reverse(fa.begin(),fa.end());
+		std::reverse(fb.begin(),fb.end());
+
+		libmaus2::lcs::NPL npl;
+		npl.np(fa.begin(),fa.end(),fb.begin(),fb.end());
+
+		std::reverse(npl.ta,npl.te);
+
+		std::pair<int64_t,int64_t> SL = npl.getTraceContainer().getStringLengthUsed();
+		assert ( SL.first <= abpos );
+		assert ( SL.second <= bbpos );
+
+		// assert ( SL.first == abpos || SL.second == bbpos );
+
+		#if 0
+		if ( SL.first || SL.second )
+			std::cerr << "[V] complete front" << " abpos=" << abpos << " bbpos=" << bbpos << " SL.first=" << SL.first << " SL.second=" << SL.second << std::endl;
+		#endif
+
+		libmaus2::lcs::AlignmentTraceContainer TATC;
+		TATC.push(npl);
+		TATC.push(ATC);
+
+		ATC.reset();
+		ATC.push(TATC);
+
+		abpos -= SL.first;
+		bbpos -= SL.second;
+
+		assert ( abpos == afrontclip || bbpos == bfrontclip );
+
+		assert (
+			libmaus2::lcs::AlignmentTraceContainer::checkAlignment(
+				ATC.ta,
+				ATC.te,
+				a.begin() + abpos,
+				b.begin() + bbpos
+			)
+		);
+	}
+	if ( algnA.getLseq() - aepos > abackclip && algnB.getLseq()-bepos > bbackclip )
+	{
+		uint64_t const availa = algnA.getLseq() - abackclip - aepos;
+		uint64_t const availb = algnB.getLseq() - bbackclip - bepos;
+
+		std::string fa = a.substr(aepos,availa);
+		std::string fb = b.substr(bepos,availb);
+
+		libmaus2::lcs::NPL npl;
+		npl.np(fa.begin(),fa.end(),fb.begin(),fb.end());
+
+		std::pair<int64_t,int64_t> SL = npl.getTraceContainer().getStringLengthUsed();
+		assert ( SL.first <= algnA.getLseq() - aepos );
+		assert ( SL.second <= algnB.getLseq() - bepos );
+
+		#if 0
+		if ( SL.first || SL.second )
+			std::cerr << "[V] complete back" << " aepos=" << aepos << " bepos=" << bepos << " SL.first=" << SL.first << " SL.second=" << SL.second << std::endl;
+		#endif
+
+		ATC.push(npl);
+
+		aepos += SL.first;
+		bepos += SL.second;
+
+		// assert ( aepos == algnA.getLseq() || bepos == algnB.getLseq() );
+		assert ( aepos == algnA.getLseq()-abackclip || bepos == algnB.getLseq()-bbackclip );
+
+		assert (
+			libmaus2::lcs::AlignmentTraceContainer::checkAlignment(
+				ATC.ta,
+				ATC.te,
+				a.begin() + abpos,
+				b.begin() + bbpos
+			)
+		);
+	}
+
+	if ( swap )
+	{
+		std::reverse(ATC.ta,ATC.te);
+
+		int64_t const nabpos = algnA.getLseq() - aepos;
+		int64_t const naepos = algnA.getLseq() - abpos;
+		int64_t const nbbpos = algnB.getLseq() - bepos;
+		int64_t const nbepos = algnB.getLseq() - bbpos;
+
+		assert ( nabpos >= 0 );
+		assert ( naepos >= nabpos );
+		assert ( naepos <= algnA.getLseq() );
+
+		assert ( nbbpos >= 0 );
+		assert ( nbepos >= nbbpos );
+		assert ( nbepos <= algnB.getLseq() );
+
+		abpos = nabpos;
+		aepos = naepos;
+		bbpos = nbbpos;
+		bepos = nbepos;
+	}
+
+	//std::cerr << "[V] completed" << std::endl;
 }
 
 
@@ -525,6 +714,8 @@ bool computeCommonPileVector(
 					ATC.ta[i] = libmaus2::lcs::BaseConstants::STEP_MISMATCH;
 			}
 		}
+
+		complete(algnA,algnB,ATC,abpos,aepos,bbpos,bepos);
 
 		fillOverlap(tspace,algnA,algnB,ATC,abpos,aepos,bbpos,bepos,OVLf,ida,idb);
 		ATC.swapRoles();
