@@ -18,7 +18,6 @@
 
 #include <config.h>
 
-#include <libmaus2/dazzler/align/TrueOverlap.hpp>
 #include <libmaus2/util/ArgParser.hpp>
 #include <libmaus2/util/ArgInfo.hpp>
 #include <libmaus2/bambam/BamAlignment.hpp>
