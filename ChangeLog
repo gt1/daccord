@@ -1,3 +1,10 @@
+daccord (0.0.7-1) unstable; urgency=medium
+
+  * update input filtering in daccord
+  * refactor
+
+ -- German Tischler <tischler@mpi-cbg.de>  Fri, 05 May 2017 10:25:01 +0200
+
 daccord (0.0.6-1) unstable; urgency=medium
 
   * avoid race condition while generating eprof file in daccord
