@@ -1,3 +1,10 @@
+daccord (0.0.8-1) unstable; urgency=medium
+
+  * update libmaus2 dependency
+  * check for GMP support in libmaus2
+
+ -- German Tischler <tischler@mpi-cbg.de>  Tue, 23 May 2017 15:38:36 +0200
+
 daccord (0.0.7-1) unstable; urgency=medium
 
   * update input filtering in daccord
