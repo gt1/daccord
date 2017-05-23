@@ -169,7 +169,7 @@ if test ! -z "${with_libmaus2}" ; then
 	fi
 fi
 
-PKG_CHECK_MODULES([libmaus2],[libmaus2 >= 2.0.303])
+PKG_CHECK_MODULES([libmaus2],[libmaus2 >= 2.0.340])
 
 if test ! -z "${with_libmaus2}" ; then
 	if test ! -z "${PKGCONFIGPATHSAVE}" ; then
@@ -204,6 +204,28 @@ AC_MSG_RESULT($have_libmaus2)
 
 if test "${have_libmaus2}" = "no" ; then
 	AC_MSG_ERROR([Required libmaus2 is not available.])
+fi
+
+AC_LANG_PUSH([C++])
+AC_MSG_CHECKING([whether libmaus2 was compiled with support for the GMP library])
+	AC_LINK_IFELSE([AC_LANG_SOURCE([
+#include <libmaus2/util/ArgInfo.hpp>
+
+				int main(int argc, char * argv[[]]) {
+					::libmaus2::util::ArgInfo const arginfo(argc,argv);
+#if ! defined(LIBMAUS2_HAVE_GMP)
+#error "libmaus2 has no support for GMP compiled in"
+#endif
+					return 0;
+			}])],
+			have_libmaus2_gmp=yes,
+			have_libmaus2_gmp=no
+		)
+AC_LANG_POP
+AC_MSG_RESULT($have_libmaus2_gmp)
+
+if test "${have_libmaus2_gmp}" = "no" ; then
+	AC_MSG_ERROR([Required GMP support in libmaus2 is not available.])
 fi
 
 AC_MSG_NOTICE([Using flags ${CFLAGS} for C compiler ${CC}])
