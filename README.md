@@ -39,7 +39,8 @@ intend to compile daccord for production (i.e. non development) use.
 Compilation of daccord
 ----------------------
 
-daccord needs libmaus2 [https://github.com/gt1/libmaus2] . When libmaus2
+daccord needs libmaus2 [https://github.com/gt1/libmaus2] . libmaus2 needs to
+be built with support for the GMP library. When libmaus2
 is installed in ${LIBMAUSPREFIX} then daccord can be compiled and
 installed in ${HOME}/daccord using
 
