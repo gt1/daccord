@@ -1,3 +1,9 @@
+daccord (0.0.10-1) unstable; urgency=medium
+
+  * add missing header files
+
+ -- German Tischler <tischler@mpi-cbg.de>  Fri, 26 May 2017 17:07:08 +0200
+
 daccord (0.0.9-1) unstable; urgency=medium
 
   * add programs filterchains, split_agr and split_dis
