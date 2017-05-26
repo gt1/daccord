@@ -385,6 +385,7 @@ static std::string helpMessage(libmaus2::util::ArgParser const & arg)
 	optionMap . push_back ( std::pair < std::string, std::string >("minfilterfreq", formatRHS("minimum k-mer filter frequency",getDefaultMinFilterFreq())));
 	optionMap . push_back ( std::pair < std::string, std::string >("maxfilterfreq", formatRHS("maximum k-mer filter frequency",getDefaultMaxFilterFreq())));
 	optionMap . push_back ( std::pair < std::string, std::string >("T", formatRHS("temporary file prefix",libmaus2::util::ArgInfo::getDefaultTmpFileName(arg.progname))));
+	optionMap . push_back ( std::pair < std::string, std::string >("D", formatRHS("maximum number of alignments considered per read",getDefaultMaxInput())));
 
 	uint64_t maxlhs = 0;
 	for ( std::vector < std::pair < std::string, std::string > >::const_iterator ita = optionMap.begin(); ita != optionMap.end(); ++ita )
