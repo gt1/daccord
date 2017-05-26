@@ -1,6 +1,7 @@
 ACLOCAL_AMFLAGS=-I m4
 
-noinst_HEADERS =
+noinst_HEADERS = ComputeOffsetLikely.hpp  DebruijnGraphBase.hpp  DebruijnGraph.hpp  DebruijnGraphInterface.hpp  DotProduct.hpp  HetThreshold.hpp  Links.hpp  Node.hpp  OffsetLikely.hpp \
+	ChainSet.hpp
 
 MANPAGES = 
 
@@ -9,7 +10,8 @@ man_MANS = ${MANPAGES}
 EXTRA_DIST = ${MANPAGES}
 
 bin_PROGRAMS = daccord computeintrinsicqv lasdetectsimplerepeats lasfilteralignments lasfilteralignmentsborderrepeats maftobam generateperfectpiles bamidrename \
-	checklas checkconsensus sortfasta mapconstoraw fillfasta canutolas spikenoise computeextrinsicqv marktrue encodegraph
+	checklas checkconsensus sortfasta mapconstoraw fillfasta canutolas spikenoise computeextrinsicqv marktrue encodegraph \
+	split_agr split_dis filterchains
 
 daccord_SOURCES = daccord.cpp
 daccord_LDADD = ${LIBMAUS2LIBS}
@@ -100,3 +102,18 @@ encodegraph_SOURCES = encodegraph.cpp
 encodegraph_LDADD = ${LIBMAUS2LIBS}
 encodegraph_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
 encodegraph_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+split_agr_SOURCES = split_agr.cpp
+split_agr_LDADD = ${LIBMAUS2LIBS}
+split_agr_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+split_agr_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+split_dis_SOURCES = split_dis.cpp
+split_dis_LDADD = ${LIBMAUS2LIBS}
+split_dis_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+split_dis_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+filterchains_SOURCES = filterchains.cpp
+filterchains_LDADD = ${LIBMAUS2LIBS}
+filterchains_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+filterchains_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
