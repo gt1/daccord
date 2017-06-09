@@ -555,7 +555,7 @@ database. This track can be computed using the computeextrinsicqv program.
 
 The following options can be used (no space between option name and parameter allowed):
 
- * -t: number of threads (default 32)
+ * -t: sets the number of threads used. By default this is the number of logical CPU cores detected
  * -d: sequencing depth (no default)
  * -D: maximum number of alignments processed per read (default 5000)
  * -I: read interval. Given as -Ii,j . This means the program will process the read id interval [i,j).
@@ -587,7 +587,7 @@ A sample call is
 
 The following options can be used (no space between option name and parameter allowed):
 
- * -t: number of threads (default 32)
+ * -t: sets the number of threads used. By default this is the number of logical CPU cores detected
  * -d: sequencing depth (no default)
  * -D: maximum number of alignments processed per read (default 5000)
  * -p: phase threshold. Overlapping regions shorter than this will be disregarded (default 4000)
