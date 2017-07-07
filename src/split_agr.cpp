@@ -325,6 +325,7 @@ struct BamAlignmentContainer
 	}
 };
 
+
 struct DecodedReadContainer
 {
 	std::map<uint64_t,uint64_t> M;
@@ -625,6 +626,25 @@ std::ostream & operator<<(std::ostream & out, MarkedPileElement const & A)
 {
 	return A.toString(out);
 }
+
+#if 0
+// map alignment position (which may use RC of read) to position on original read
+static int64_t mapPos(bool const inv, int64_t const rlb, int64_t const pos)
+{
+	int64_t r;
+
+	if ( inv )
+	{
+		r = rlb - pos - 1;
+	}
+	else
+	{
+		r = pos;
+	}
+
+	return r;
+}
+#endif
 
 struct IdentityPositionMapper
 {
@@ -930,6 +950,12 @@ void phaseChains(
 		}
 	}
 
+	#if 0
+	int64_t const aread = ita->aread;
+	for ( uint64_t i = 0; i < fragments.size(); ++i )
+		err << "aread=" << aread << " fragments[" << i << "]=[" << fragments[i].from << "," << fragments[i].to << ")" << std::endl;
+	#endif
+
 	#if defined(PHASE_DEBUG)
 	libmaus2::dazzler::align::TrueOverlapStats TOS;
 	libmaus2::dazzler::align::TrueOverlap TO(TOS,DB,tspace);
@@ -989,6 +1015,97 @@ void phaseChains(
 			Vcstat[i] += Vstat[z];
 		}
 		Vctrue[i] = trueflag;
+	}
+	#endif
+
+	#if 0
+	#if defined(PHASE_DEBUG)
+	libmaus2::dazzler::align::TrueOverlapStats TOS;
+	libmaus2::dazzler::align::TrueOverlap TO(TOS,DB,tspace);
+	std::vector<bool> Vtrue(ite-ita,false);
+	std::vector<bool> Vctrue(numchains,false);
+	std::vector<libmaus2::lcs::AlignmentStatistics> Vstat(ite-ita);
+	std::vector<libmaus2::lcs::AlignmentStatistics> Vcstat(numchains);
+
+	for ( libmaus2::dazzler::align::Overlap const * itc = ita; itc != ite; ++itc )
+	{
+		uint8_t const * ua = reinterpret_cast<uint8_t const *>(RC.getForwardRead(itc->aread));
+		uint8_t const * ub = reinterpret_cast<uint8_t const *>(itc->isInverse() ? RC2.getReverseComplementRead(itc->bread) : RC2.getForwardRead(itc->bread));
+		libmaus2::bambam::BamAlignment const & abam = BAC[itc->aread];
+		libmaus2::bambam::BamAlignment const & bbam = BAC[itc->bread];
+
+		trace_type::shared_ptr_type Ptrace = traceFreeList.get();
+		itc->computeTrace(ua,ub,tspace,*Ptrace,NP);
+		bool const trueoverlap = libmaus2::dazzler::align::TrueOverlap::trueOverlap(abam,bbam,*Ptrace,itc->path.abpos,itc->path.bbpos,itc->isInverse(),RC2.getReadLength(itc->bread));
+		traceFreeList.put(Ptrace);
+
+		Vtrue[itc-ita] = trueoverlap;
+
+		std::string const aref = abam.getReferenceUsedPrime(itc->path.abpos,itc->path.aepos);
+		int64_t bb = itc->path.bbpos;
+		int64_t be = itc->path.bepos;
+		if ( itc->isInverse() )
+		{
+			std::swap(bb,be);
+			bb = RC2.getReadLength(itc->bread) - bb;
+			be = RC2.getReadLength(itc->bread) - be;
+		}
+		std::string bref = bbam.getReferenceUsedPrime(bb,be);
+		if ( itc->isInverse() )
+		{
+			bref = libmaus2::fastx::reverseComplementUnmapped(bref);
+		}
+
+		libmaus2::lcs::NP np;
+		np.np(aref.begin(),aref.end(),bref.begin(),bref.end());
+
+		uint64_t clipfront = 0;
+		while ( np.ta+clipfront != np.te && np.ta[clipfront] != libmaus2::lcs::AlignmentTraceContainer::STEP_MATCH )
+			++clipfront;
+		uint64_t clipback = 0;
+		while ( np.ta+clipback != np.te && np.te[-static_cast<int64_t>(clipback)-1] != libmaus2::lcs::AlignmentTraceContainer::STEP_MATCH )
+			++clipback;
+
+		Vstat[itc-ita] = libmaus2::lcs::AlignmentTraceContainer::getAlignmentStatistics(np.ta+clipfront,np.te-clipback);
+
+		#if 0
+		err << itc->isInverse() << std::endl;
+
+		std::cerr << "clipfront=" << clipfront << " clipback=" << clipback << std::endl;
+		libmaus2::lcs::AlignmentPrint::printAlignmentLines(
+			err,
+			aref.begin(),aref.size(),bref.begin(),bref.size(),
+			80,
+			np.ta,
+			np.te
+		);
+
+		std::cerr << libmaus2::lcs::AlignmentTraceContainer::getAlignmentStatistics(np.ta+clipfront,np.te-clipback) << std::endl;
+		#endif
+	}
+	for ( uint64_t i = 0; i < numchains; ++i )
+	{
+		uint64_t const len = chainlengths[i+1]-chainlengths[i];
+		bool trueflag = true;
+		for ( uint64_t j = 0; j < len; ++j )
+		{
+			uint64_t const z = chains[chainlengths[i]+j];
+			trueflag = trueflag && Vtrue[z];
+			Vcstat[i] += Vstat[z];
+		}
+		Vctrue[i] = trueflag;
+	}
+	#endif
+	#endif
+
+
+	#if 0
+	for ( uint64_t i = 0; i < numchains; ++i )
+	{
+		uint64_t const len = chainlengths[i+1]-chainlengths[i];
+		err << "chain " << i << " length " << len << std::endl;
+		for ( uint64_t j = 0; j < len; ++j )
+			err << "\t" << ita[chains[chainlengths[i]+j]].getHeader() << std::endl;
 	}
 	#endif
 
@@ -1133,6 +1250,10 @@ void phaseChains(
 					assert ( UC.first == usea );
 
 					uint8_t const * ub = reinterpret_cast<uint8_t const *>(OVL.isInverse() ? (RC2.getReverseComplementRead(OVL.bread)+bstart) : (RC2.getForwardRead(OVL.bread)+bstart));
+					#if 0
+					uint8_t const * uq = reinterpret_cast<uint8_t const *>(OVL.isInverse() ? (RC2.getReverseComplementRead(OVL.bread)) : (RC2.getForwardRead(OVL.bread)));
+					uint8_t const * uf = reinterpret_cast<uint8_t const *>(RC2.getForwardRead(OVL.bread));
+					#endif
 
 					int64_t const rlb = RC2.getReadLength(OVL.bread);
 
@@ -1195,6 +1316,13 @@ void phaseChains(
 	#endif
 
 	completeLPV(LPV);
+
+	#if 0
+	for ( uint64_t i = 0; i < LPV.size(); ++i )
+	{
+		err << "**" << LPV[i] << std::endl;
+	}
+	#endif
 
 	// agrement vector (how often does B read agree with A at disagreement locations?)
 	libmaus2::autoarray::AutoArray<uint64_t> AM(numchains,false);
@@ -1370,6 +1498,11 @@ void phaseChains(
 
 				if ( freq >= dthres )
 				{
+					#if 0
+					for ( int64_t i = tlow; i < thigh; ++i )
+						err << LPV[i].toString() << std::endl;
+					#endif
+
 					for ( int64_t i = tlow; i < thigh; ++i )
 					{
 						int64_t const seqa = LPV[i].seq;
@@ -1381,9 +1514,20 @@ void phaseChains(
 								{
 									int64_t const seqb = LPV[j].seq;
 
+									#if 0
+									if ( seqa < 0 )
+										err << "UP " << ita[0].aread << "," << ita[seqb].bread << std::endl;
+									#endif
+
 									assert ( seqa != seqb );
+									#if 0
+									MM[
+										std::pair<int64_t,int64_t>(seqa,seqb)
+									]++;
+									#endif
 
 									AM[seqtochain[seqb]]++;
+									// ZZZ
 								}
 						}
 					}
@@ -1413,6 +1557,15 @@ void phaseChains(
 	#endif
 
 	assert ( numdis == (lpposw ? ER.rank1(lpposw*64-1) : 0) );
+
+	#if 0
+	err << "numdis=" << numdis << std::endl;
+	#endif
+
+	#if 0
+	for ( uint64_t i = 0; i < numchains; ++i )
+		err << "AM[" << i << "]=" << AM[i] << std::endl;
+	#endif
 
 	uint64_t csize = 0;
 	for ( uint64_t i = 0; i < fragments.size(); ++i )
@@ -1494,10 +1647,19 @@ void phaseChains(
 					}
 					ldif += lldif;
 
+					#if 0
+					err << "chainid=" << chainid << " chainsubid=" << chainsubid << " y=" << y << " x=" << x << " IA=" << IA << " IB=" << IB << " IC=" << IC
+						<< " O=" << ita[y]
+						<< std::endl;
+					#endif
+
 					for ( uint64_t i = 0; i < lldif; ++i )
 					{
 						uint64_t const j = ER.select1 ( ER.rankm1(zstart) + i );
 
+						#if 0
+						err << "y=" << y << " x=" << x << " i=" << i << "/" << lldif << " j=" << j << " " << zstart << " " << zstop << " " << Vcoord[j].cid << "," << Vcoord[j].cpos << " " << Vcoord[j].cpre << std::endl;
+						#endif
 						assert ( j >= zstart );
 						assert ( j < zstop );
 
@@ -1540,6 +1702,12 @@ void phaseChains(
 
 						double const ae = (aq == std::numeric_limits<uint8_t>::max()) ? crate : (static_cast<double>(aq) / std::numeric_limits<uint8_t>::max());
 						double const be = (bq == std::numeric_limits<uint8_t>::max()) ? crate : (static_cast<double>(bq) / std::numeric_limits<uint8_t>::max());
+
+						#if 0
+						err << "A " << *it_A << " " << apos << " " << ablock << " " << ae << std::endl;
+						err << "B " << *it_B << " " << bpos << " " << bblock << " " << be << std::endl;
+						err << "C " << (1.0-ae)*(1.0-be) << std::endl;
+						#endif
 
 						srate += (1.0-ae)*(1.0-be);
 						PV.push_back((1.0-ae)*(1.0-be));
@@ -2048,6 +2216,11 @@ std::vector<uint64_t> countConsensus(std::string const & consin)
 	return V;
 }
 
+static double getDefaultPhaseThres()
+{
+	return 0.3;
+}
+
 int phaser(
 	libmaus2::util::ArgParser const & arg,
 	std::string const & outlasfn,
@@ -2084,6 +2257,12 @@ int phaser(
 	double const est_d_frac = GAS.deletions / static_cast<double>(numerr);
 	double const est_s_frac = GAS.mismatches / static_cast<double>(numerr);
 
+	#if 0
+	double const p_i = static_cast<double>(GAS.insertions) / len;
+	double const p_d = static_cast<double>(GAS.deletions) / len;
+	double const p_s = static_cast<double>(GAS.mismatches) / len;
+	#endif
+
 	std::cerr << "[V] est_i_frac=" << est_i_frac << std::endl;
 	std::cerr << "[V] est_d_frac=" << est_d_frac << std::endl;
 	std::cerr << "[V] est_s_frac=" << est_s_frac << std::endl;
@@ -2100,12 +2279,84 @@ int phaser(
 	std::cerr << "[V] p^2=" << crate2 << std::endl;
 
 	uint64_t const d = arg.getParsedArg<uint64_t>("d");
+	double const phasethres = arg.uniqueArgPresent("p") ? arg.getParsedArg<double>("p") : getDefaultPhaseThres();
 
 	std::cerr << "crate=" << crate << std::endl;
 	uint64_t const dthres = HetThreshold::getHetThreshold(d,erate);
+		//libmaus2::math::Binom::binomRowUpperGmpFloatLimit(crate2,d,512,0.99);
+
+	#if 0
+	{
+		uint64_t const n = 678;
+		uint64_t const n0 = 650;
+		uint64_t const n1 = n-n0;
+
+		double const p = 0.85;
+		double const p2 = p*p;
+
+		// double const pi = (1-p);
+		// double const pi2 = (1-p) * p * (1.0/3.0 * est_s_frac + 1.0/4.0 * est_i_frac + est_d_frac);
+		double const pi2 = 1-p2;
+
+		libmaus2::math::GmpFloat s(0);
+		libmaus2::math::GmpFloat zzs(0);
+		for ( uint64_t i = 0; i <= n; ++i )
+		{
+			libmaus2::math::GmpFloat r(0);
+
+			for ( uint64_t i0 = std::max(static_cast<int64_t>(0),static_cast<int64_t>(i)-static_cast<int64_t>(n1)); i0 <= std::min(i,n0); ++i0 )
+			{
+				assert ( i0 <= i );
+
+				uint64_t const i1 = i - i0;
+				assert ( i1 <= n1 );
+
+				libmaus2::math::GmpFloat q =
+					libmaus2::math::Binom::binomSingleGmp(p2,i0,n0,512)
+					*
+					libmaus2::math::Binom::binomSingleGmp(pi2,i1,n1,512);
+
+				r += q;
+			}
+
+			s += r;
+
+			libmaus2::math::GmpFloat const zz = libmaus2::math::Binom::binomSingleGmp(p2,i,n,512);
+			zzs += zz;
+
+			std::cerr << "[QQ]\t" << i << "\t" << r << "\t" << s << "\t" << zz << "\t" << zzs << "\t" << (r/(r+zz)) << "\t" << (zz/(r+zz)) << std::endl;
+		}
+
+		#if 0
+		std::vector < libmaus2::math::GmpFloat > const V = libmaus2::math::Binom::binomVector(crate2, n, 512);
+		for ( uint64_t i = 0; i <= n; ++i )
+		{
+			libmaus2::math::GmpFloat const v = libmaus2::math::Binom::binomSingleGmp(crate2,i,n,512);
+			std::cerr << V[i] << " " << v << std::endl;
+		}
+		#endif
+
+	}
+	#endif
+
+	#if 0
+	{
+		uint64_t const n = 1000;
+		libmaus2::math::GmpFloat s = 0;
+		double const crate2 = 0.83 * 0.83;
+		std::vector < libmaus2::math::GmpFloat > const V = libmaus2::math::Binom::binomVector(crate2, n, 512);
+		for ( uint64_t i = 0; i <= 1000; ++i )
+		{
+			s += V[i];
+
+			std::cerr << "[Q]\t"  << i << "\t" << s << std::endl;
+		}
+	}
+	#endif
 
 	std::cerr << "[V] d=" << d << std::endl;
 	std::cerr << "[V] dthres=" << dthres << std::endl;
+	std::cerr << "[V] phasethres=" << phasethres << std::endl;
 
 	std::string const consfnindex = getFastAIndexFileName(consin);
 
@@ -2514,6 +2765,10 @@ int phaser(
 					{
 						if ( RO[j].path.aepos <= RO[i].path.abpos )
 						{
+							#if 0
+							int64_t const diagend = RO[j].path.aepos - RO[j].path.bepos;
+							int64_t const diagstart = RO[i].path.abpos - RO[i].path.bbpos;
+							#endif
 							int64_t const difa = RO[i].path.abpos - RO[j].path.aepos;
 							int64_t const difb = RO[i].path.bbpos - RO[j].path.bepos;
 							assert ( difa >= 0 );
@@ -2587,6 +2842,17 @@ int phaser(
 						childlinks[childoffsets[i]+j] = V[j].second;
 				}
 
+			#if 0
+			for ( uint64_t i = 0; i < f; ++i )
+				for ( uint64_t j = 0; j < childcount[i]; ++j )
+				{
+					int64_t const from = i;
+					int64_t const to = childlinks[childoffsets[i]+j];
+					std::cerr << from << " " << to << " " << childdiagdif[to] << " "
+						<< RO[from].getHeader() << " -> " << RO[to].getHeader() << std::endl;
+				}
+			#endif
+
 			std::set<uint64_t> sunused;
 			for ( uint64_t i = 0; i < f; ++i )
 				sunused.insert(i);
@@ -2623,6 +2889,13 @@ int phaser(
 			libmaus2::util::PrefixSums::prefixSums(chainlengths.begin(),chainlengths.end());
 		}
 
+		#if 0
+		{
+			libmaus2::aio::DebugLineOutputStream DLOS(std::cerr,libmaus2::aio::StreamLock::cerrlock);
+			std::cerr << "[V] " << z << " " << VOVL.size() << std::endl;
+		}
+		#endif
+
 		// std::sort(RO.begin(),RO.begin()+f,OverlapPosComparator());
 
 		#if defined(PHASER_HANDLE_SINGLE)
@@ -2655,6 +2928,11 @@ int phaser(
 			logostr << "[S] handling aread " << RO[0].aread << std::endl;
 
 		// std::pair<unsigned char const *, unsigned char const *> const Q = inqual.getQualityForRead(Vovl[low].aread);
+
+		#if 0
+		for ( unsigned char const * p = Q.first; p != Q.second; ++p )
+			std::cerr << "block " << p-Q.first << " qual " << static_cast<int>(*p) << std::endl;
+		#endif
 
 		std::vector < ReadFragment > fragments;
 		for ( uint64_t i = 0; i < Vpat.size(); ++i )
@@ -2812,6 +3090,7 @@ static std::string helpMessage(libmaus2::util::ArgParser const & arg)
 	optionMap . push_back ( std::pair < std::string, std::string >("t", formatRHS("number of threads",getDefaultNumThreads())));
 	optionMap . push_back ( std::pair < std::string, std::string >("d", formatRHS("sequencing depth",getDefaultSequencingDepth())));
 	optionMap . push_back ( std::pair < std::string, std::string >("D", formatRHS("max align",getDefaultMaxInput())));
+	optionMap . push_back ( std::pair < std::string, std::string >("p", formatRHS("phase threshold",getDefaultPhaseThres())));
 	optionMap . push_back ( std::pair < std::string, std::string >("I", formatRHS("read interval",std::string("0,") + libmaus2::util::NumberSerialisation::formatNumber(std::numeric_limits<uint64_t>::max(),0))));
 	optionMap . push_back ( std::pair < std::string, std::string >("J", formatRHS("reads part",std::string("0,1"))));
 	optionMap . push_back ( std::pair < std::string, std::string >("E", formatRHS("error profile file name",std::string("in.las.eprof"))));
@@ -2858,6 +3137,15 @@ int main(int argc, char * argv[])
 	try
 	{
 		libmaus2::util::ArgParser arg(argc,argv);
+
+		#if 0
+		uint64_t n = 15000;
+		double const pp = std::pow(0.85,4) * std::pow(0.15*0.2,2);
+		for ( uint64_t i = 0; i <= n; ++i )
+			std::cerr << "i=" << i << "\t" << libmaus2::math::Binom::binomSingleGmp(pp,i,n,512) << std::endl;
+
+		return 0;
+		#endif
 
 		if ( arg.uniqueArgPresent("v") || arg.uniqueArgPresent("version") )
 		{
