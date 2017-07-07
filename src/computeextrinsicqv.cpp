@@ -100,10 +100,11 @@ static std::string helpMessage(libmaus2::util::ArgParser const & /* arg */)
 
 int computequality(libmaus2::util::ArgParser const & arg)
 {
-	libmaus2::fastx::FastaPeeker FA(arg[0]);
+	// libmaus2::fastx::FastaPeeker FA(arg[0]);
 	libmaus2::fastx::FastaPeeker FC(arg[1]);
 	std::string const dbname = arg[2];
-	libmaus2::dazzler::db::DatabaseFile const DB(dbname);
+	libmaus2::dazzler::db::DatabaseFile DB(dbname);
+	DB.computeTrimVector();
 	uint64_t const part = 3 < arg.size() ? arg.getParsedRestArg<uint64_t>(3) : 0;
 
 	int64_t const tspace = arg.uniqueArgPresent("tspace") ? arg.getUnsignedNumericArg<uint64_t>("tspace") : getDefaultTSpace();
@@ -113,53 +114,22 @@ int computequality(libmaus2::util::ArgParser const & arg)
 
 	libmaus2::aio::OutputStreamInstance dataOSI(datafn);
 
-	libmaus2::fastx::FastAReader::pattern_type pa;
 	libmaus2::fastx::FastAReader::pattern_type pb;
-
-	// int64_t const tspace = 100;
 
 	libmaus2::lcs::NP np;
 
-	int64_t first = -1;
-	std::vector<uint64_t> annosize;
+	// int64_t first = -1;
+	std::vector<uint64_t> annosize(DB.size(),0ull);
 
-	while ( FA.getNext(pa) )
+	for ( uint64_t aid = 0; aid < DB.size(); ++aid )
 	{
-		std::string sid = pa.getShortStringId();
-		if ( sid.find('/') != std::string::npos )
-		{
-			sid = sid.substr(sid.find('/')+1);
-
-			if ( sid.find('/') != std::string::npos )
-				sid = sid.substr(0,sid.find('/'));
-			else
-				continue;
-		}
-		else
-		{
-			continue;
-		}
-
-		std::istringstream istr(sid);
-		int64_t id;
-		istr >> id;
-
-		if ( first < 0 )
-			first = id;
-
-		uint64_t const aid = id - first;
-
-		while ( !(aid < annosize.size()) )
-			annosize.push_back(0);
-
-		assert ( aid < annosize.size() );
-
-		uint64_t const l = pa.spattern.size();
+		uint64_t const l = DB.getRead(aid).rlen;
+		// number of trace point intervals
 		uint64_t const nt = (l + tspace - 1)/tspace;
 		annosize[aid] = nt;
 		std::vector<uint8_t> V(nt,std::numeric_limits<uint8_t>::max());
 
-		while ( FC.peekNext(pb) && getId(pb) == id )
+		while ( FC.peekNext(pb) && getId(pb) == static_cast<int64_t>(aid) )
 		{
 			FC.getNext(pb);
 
@@ -178,12 +148,12 @@ int computequality(libmaus2::util::ArgParser const & arg)
 			istr >> to;
 			assert ( istr.peek() == std::istream::traits_type::eof() );
 
-			std::string const asub = pa.spattern.substr(from,to-from+1);
+			std::string const asub = DB[aid].substr(from,to-from+1);
 			std::string const bsub = pb.spattern;
 
 			np.np(asub.begin(),asub.end(),bsub.begin(),bsub.end());
 
-			/*
+			#if 0
 			libmaus2::lcs::AlignmentPrint::printAlignmentLines(
 				std::cerr,
 				asub.begin(),
@@ -194,7 +164,7 @@ int computequality(libmaus2::util::ArgParser const & arg)
 				np.ta,
 				np.te
 			);
-			*/
+			#endif
 
 			if ( from % tspace != 0 )
 			{
@@ -226,10 +196,16 @@ int computequality(libmaus2::util::ArgParser const & arg)
 		}
 
 		for ( uint64_t i = 0; i < V.size(); ++i )
+		{
+			// std::cerr << aid << " " << i << " " << (double)V[i]/255.0 << std::endl;
 			dataOSI.put(V[i]);
+		}
 
-		std::cerr << "[V] " << id << std::endl;
+		if ( aid % 1024 == 0 )
+			std::cerr << "[V] " << aid << std::endl;
 	}
+
+	std::cerr << "[V] " << DB.size() << std::endl;
 
 	dataOSI.flush();
 
