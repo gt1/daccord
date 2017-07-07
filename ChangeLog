@@ -1,3 +1,9 @@
+daccord (0.0.11-1) unstable; urgency=medium
+
+  * Use data in Dazzler database for extracting uncorrected reads instead of reading them from FastA file in computeextrinsicqv.
+
+ -- German Tischler <tischler@mpi-cbg.de>  Sat, 08 Jul 2017 00:29:07 +0200
+
 daccord (0.0.10-1) unstable; urgency=medium
 
   * add missing header files
