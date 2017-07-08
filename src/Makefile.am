@@ -11,7 +11,7 @@ EXTRA_DIST = ${MANPAGES}
 
 bin_PROGRAMS = daccord computeintrinsicqv lasdetectsimplerepeats lasfilteralignments lasfilteralignmentsborderrepeats maftobam generateperfectpiles bamidrename \
 	checklas checkconsensus sortfasta mapconstoraw fillfasta canutolas spikenoise computeextrinsicqv marktrue encodegraph \
-	split_agr split_dis filterchains
+	split_agr split_dis filterchains wgsimtobam
 
 daccord_SOURCES = daccord.cpp
 daccord_LDADD = ${LIBMAUS2LIBS}
@@ -117,3 +117,8 @@ filterchains_SOURCES = filterchains.cpp
 filterchains_LDADD = ${LIBMAUS2LIBS}
 filterchains_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
 filterchains_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+wgsimtobam_SOURCES = wgsimtobam.cpp
+wgsimtobam_LDADD = ${LIBMAUS2LIBS}
+wgsimtobam_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+wgsimtobam_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}

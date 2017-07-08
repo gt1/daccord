@@ -625,3 +625,22 @@ The following options can be used (no space between option name and parameter al
 A sample call is
 
 	filterchains -l5000 out.las cons.fasta in.las
+
+wgsimtobam
+----------
+
+wgsimtobam converts simulated reads produced by wgsim to a BAM file taking
+the positions into account and computing alignments between the reads and
+the designated reference region for each read.
+
+It expects two arguments
+
+  * ref.fasta: the name of the FastA file used as a reference
+  * reads.fasta: FastA file obtained by converting a FastQ file produced by
+    wgsim to FastA
+
+A sample call is
+
+	wgsimtobam ref.fasta reads.fasta >reads.bam
+
+The program treats the input file as single ended reads.
