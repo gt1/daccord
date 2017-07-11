@@ -51,6 +51,19 @@ installed in ${HOME}/daccord using
 
 The release packages come with a configure script included (making the autoreconf call unnecessary for source obtained via one of those).
 
+Citations:
+----------
+
+The core algorithms used by daccord are described in the following two
+papers:
+
+  * German Tischler and Eugene W. Myers: Non Hybrid Long Read Consensus Using Local De Bruijn Graph Assembly, preprint on bioRxiv, https://doi.org/10.1101/106252 
+  * German Tischler: Haplotype And Repeat Separation In Long Reads, preprint on bioRxiv, https://doi.org/10.1101/145474 
+
+The first paper describes the algorithm used in the daccord program. The
+second one explains the algorithms used by the programs split_agr and
+split_dis.
+
 daccord
 -------
 
