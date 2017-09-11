@@ -39,6 +39,11 @@ static uint64_t getDefaultNumThreads()
 	return libmaus2::parallel::NumCpus::getNumLogicalProcessors();
 }
 
+static uint64_t getDefaultMinLen()
+{
+	return 1000;
+}
+
 struct UPair
 {
 	uint64_t key;
@@ -153,6 +158,9 @@ int checklas(libmaus2::util::ArgParser const & arg)
 	uint64_t const numthreads = arg.uniqueArgPresent("t") ? arg.getUnsignedNumericArg<uint64_t>("t") : getDefaultNumThreads();
 	int volatile failed = 0;
 	libmaus2::parallel::PosixSpinLock failedlock;
+	int64_t const minlen = arg.uniqueArgPresent("minlen") ? arg.getUnsignedNumericArg<uint64_t>("minlen") : 1000;
+
+	int64_t const gentspace = libmaus2::dazzler::align::AlignmentFile::getTSpace(genfn);
 
 	libmaus2::bambam::BamHeader::unique_ptr_type Pheader;
 	{
@@ -227,6 +235,14 @@ int checklas(libmaus2::util::ArgParser const & arg)
 		uint64_t const packsize = (numreads + tnumpacks - 1)/tnumpacks;
 		uint64_t const numpacks = (numreads + packsize - 1)/packsize;
 		int64_t const tspace = libmaus2::dazzler::align::AlignmentFile::getTSpace(infn);
+
+		if ( tspace != gentspace )
+		{
+			libmaus2::exception::LibMausException lme;
+			lme.getStream() << "tspace mismatch between gen " << gentspace << " and provided las file " << tspace << std::endl;
+			lme.finish();
+			throw lme;
+		}
 
 		uint64_t maxreq = 0;
 
@@ -309,7 +325,6 @@ int checklas(libmaus2::util::ArgParser const & arg)
 		}
 
 		uint64_t const memtotal = 1024*1024*1024;
-		int64_t const minlen = 1000;
 
 		uint64_t const memfull = std::max(memtotal,maxreq);
 		std::string const tpmergefn = tmpfilebase+"_tpnummerge";
@@ -497,6 +512,12 @@ int checklas(libmaus2::util::ArgParser const & arg)
 							bool const ok = Plas->getNextOverlap(OVLin);
 							assert ( OVLin.aread == aread );
 							assert ( ok );
+
+							if ( verbose )
+							{
+								libmaus2::parallel::ScopePosixSpinLock slock(libmaus2::aio::StreamLock::cerrlock);
+								std::cerr << "[V] extra " << aread << " -> " << OVLin.bread << " span " << (OVLin.path.aepos - OVLin.path.abpos) << std::endl;
+							}
 
 							uint64_t const tbvo = OVLin.getTraceBlocks(tspace, TBV, 0, true /* only full blocks */);
 
@@ -951,6 +972,7 @@ static std::string helpMessage(libmaus2::util::ArgParser const & arg)
 	optionMap . push_back ( std::pair < std::string, std::string >("mis", formatRHS("write missed true alignment file",false)));
 	optionMap . push_back ( std::pair < std::string, std::string >("keep", formatRHS("write kept true alignment file",false)));
 	optionMap . push_back ( std::pair < std::string, std::string >("T", formatRHS("temporary file prefix",libmaus2::util::ArgInfo::getDefaultTmpFileName(arg.progname))));
+	optionMap . push_back ( std::pair < std::string, std::string >("minlen", formatRHS("minimum length for alignments",getDefaultMinLen())));
 
 	uint64_t maxlhs = 0;
 	for ( std::vector < std::pair < std::string, std::string > >::const_iterator ita = optionMap.begin(); ita != optionMap.end(); ++ita )
