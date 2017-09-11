@@ -1,4 +1,4 @@
-AC_INIT(daccord,0.0.12,[tischler@mpi-cbg.de],[daccord],[http://www.mpi-cbg.de])
+AC_INIT(daccord,0.0.13,[tischler@mpi-cbg.de],[daccord],[http://www.mpi-cbg.de])
 AC_CANONICAL_SYSTEM
 AC_PROG_LIBTOOL
 

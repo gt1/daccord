@@ -1,3 +1,10 @@
+daccord (0.0.13-1) unstable; urgency=medium
+
+  * check for matching tspace in checklas
+  * use TempFileNameGenerator with sub directories in generateperfectpiles (avoid lots of files in a single directory)
+
+ -- German Tischler <tischler@mpi-cbg.de>  Mon, 11 Sep 2017 21:46:10 +0200
+
 daccord (0.0.12-1) unstable; urgency=medium
 
   * add wgsimtobam tool
