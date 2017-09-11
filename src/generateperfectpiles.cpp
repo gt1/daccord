@@ -39,6 +39,7 @@
 #include <libmaus2/parallel/NumCpus.hpp>
 #include <libmaus2/bambam/BamRangeDecoder.hpp>
 #include <libmaus2/bambam/BamNumericalIndexGenerator.hpp>
+#include <libmaus2/util/TempFileNameGenerator.hpp>
 
 struct BamLoader
 {
@@ -749,7 +750,8 @@ int generateperfectpiles(libmaus2::util::ArgParser const & arg)
 	uint64_t const numthreads = arg.uniqueArgPresent("t") ? arg.getUnsignedNumericArg<uint64_t>("t") : getDefaultNumThreads();
 	int64_t const tspace = arg.uniqueArgPresent("tspace") ? arg.getUnsignedNumericArg<uint64_t>("tspace") : getDefaultTSpace();
 
-	std::string const tmplasfnbase = tmpfilebase + ".las.tmp";
+	std::cerr << "[V] using tspace=" << tspace << std::endl;
+
 	std::string const lasfn = arg[0];
 	std::string const bamfn = arg[1];
 
@@ -779,11 +781,13 @@ int generateperfectpiles(libmaus2::util::ArgParser const & arg)
 		std::cerr << "split " << splitV[i] << std::endl;
 	#endif
 
+	std::string const tmplasfnbase = tmpfilebase + "_las_tmp";
+	libmaus2::util::TempFileNameGenerator tmpgen(tmplasfnbase,3);
 	std::vector<std::string> Vtmplasfn(splitV.size());
 	for ( uint64_t i = 0; i < Vtmplasfn.size(); ++i )
 	{
 		std::ostringstream ostr;
-		ostr << tmplasfnbase << "." << std::setw(6) << std::setfill('0') << i;
+		ostr << tmpgen.getFileName() << "." << std::setw(6) << std::setfill('0') << i;
 		Vtmplasfn[i] = ostr.str();
 	}
 
