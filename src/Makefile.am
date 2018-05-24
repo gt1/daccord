@@ -1,7 +1,21 @@
 ACLOCAL_AMFLAGS=-I m4
 
-noinst_HEADERS = ComputeOffsetLikely.hpp  DebruijnGraphBase.hpp  DebruijnGraph.hpp  DebruijnGraphInterface.hpp  DotProduct.hpp  HetThreshold.hpp  Links.hpp  Node.hpp  OffsetLikely.hpp \
-	ChainSet.hpp
+noinst_HEADERS = \
+	ActiveElement.hpp \
+	ChainSet.hpp \
+	ComputeOffsetLikely.hpp \
+	DebruijnGraphBase.hpp \
+	DebruijnGraphContainer.hpp \
+	DebruijnGraph.hpp \
+	DebruijnGraphInterface.hpp \
+	DecodedReadContainer.hpp \
+	DotProduct.hpp \
+	HandleContext.hpp \
+	HetThreshold.hpp \
+	Links.hpp \
+	Node.hpp \
+	OffsetLikely.hpp \
+	TraceType.hpp
 
 MANPAGES = 
 

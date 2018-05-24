@@ -23,6 +23,56 @@
 #include <Links.hpp>
 #include <OffsetLikely.hpp>
 #include <DebruijnGraphInterface.hpp>
+#include <libmaus2/math/binom.hpp>
+
+struct KmerLimit
+{
+	typedef KmerLimit this_type;
+	typedef libmaus2::util::unique_ptr<this_type>::type unique_ptr_type;
+	typedef libmaus2::util::shared_ptr<this_type>::type shared_ptr_type;
+
+	double p_k;
+	std::vector<uint64_t> Vlim;
+
+	KmerLimit(KmerLimit const & O)
+	: p_k(O.p_k), Vlim(O.Vlim)
+	{
+
+	}
+
+	KmerLimit(double const rp_k, uint64_t const preload)
+	: p_k(rp_k), Vlim()
+	{
+		for ( uint64_t i = 0; i < preload; ++i )
+			getLimit(i);
+	}
+
+	double getLimit(uint64_t const i)
+	{
+		if ( p_k )
+		{
+			while ( !(i < Vlim.size()) )
+			{
+				uint64_t const lim = libmaus2::math::Binom::binomRowUpperLimit(p_k,Vlim.size(),0.99);
+
+				#if 0
+				uint64_t const glim = libmaus2::math::Binom::binomRowUpperGmpFloatLimit(p_k,Vlim.size(),512,0.99);
+				std::cerr << "p_k=" << p_k << " i=" << i << "lim=" << lim << " glim=" << glim << std::endl;
+				#endif
+
+				Vlim.push_back(lim);
+			}
+
+			assert ( i < Vlim.size() );
+
+			return Vlim[i];
+		}
+		else
+		{
+			return 0;
+		}
+	}
+};
 
 struct NodeComparator
 {
@@ -186,6 +236,25 @@ struct Path
 	bool operator<(Path const & P) const
 	{
 		return weight > P.weight;
+	}
+};
+
+struct PathPosWeightComparator
+{
+	bool operator()(Path const & A, Path const & B) const
+	{
+		if ( A.pos != B.pos )
+			return A.pos < B.pos;
+		else
+			return A.weight > B.weight;
+	}
+};
+
+struct PathWeightComparator
+{
+	bool operator()(Path const & A, Path const & B) const
+	{
+		return A.weight < B.weight;
 	}
 };
 
@@ -387,6 +456,7 @@ struct ConsensusCandidate
 	}
 	#endif
 };
+
 
 struct ConsensusCandidateDumpHeapComparator
 {
@@ -633,6 +703,10 @@ struct DebruijnGraph :
 	static uint64_t const posbuckets = 1ull << posbucketsbits;
 	static uint64_t const posbucketsmask = posbuckets-1;
 
+	double const p;
+	double const p_k;
+	KmerLimit KL;
+
 	libmaus2::autoarray::AutoArray< uint64_t > kbuckethist;
 	libmaus2::autoarray::AutoArray< uint64_t > seqbuckethist;
 	libmaus2::autoarray::AutoArray< uint64_t > posbuckethist;
@@ -791,7 +865,9 @@ struct DebruijnGraph :
 	libmaus2::autoarray::AutoArray< NodeAddElement > ANE;
 
 	// path todo list for traverse
-	libmaus2::util::FiniteSizeHeap<Path> PQ;
+	libmaus2::util::FiniteSizeHeap<Path,PathPosWeightComparator> PQ;
+	// path todo list for traverse
+	std::vector < libmaus2::util::FiniteSizeHeap<Path,PathWeightComparator>::shared_ptr_type > APQ;
 	// score interval todo list for traverse
 	libmaus2::util::FiniteSizeHeap<ScoreInterval> SIQ;
 
@@ -842,6 +918,7 @@ struct DebruijnGraph :
 	typedef libmaus2::rank::ERank222B rank_type;
 	typedef libmaus2::wavelet::WaveletTree<rank_type,uint64_t> wt_type;
 	typedef wt_type::unique_ptr_type wt_ptr_type;
+	wt_type::ProduceBitsContext ARWWT_context;
 	wt_ptr_type ARWWT;
 
 	uint64_t maxkmerpos;
@@ -852,8 +929,10 @@ struct DebruijnGraph :
 	libmaus2::autoarray::AutoArray < rph_ptr_type > ARPH;
 	uint64_t ARPHo;
 
+	#if 0
 	libmaus2::autoarray::AutoArray < libmaus2::util::FiniteSizeHeap<Path,PathWeightHeapComparator>::shared_ptr_type > Apathheap;
 	uint64_t Apathheapo;
+	#endif
 
 	libmaus2::util::FiniteSizeHeap<ReversePath,ReversePathWeightQueueHeapComparator> RPST;
 
@@ -998,8 +1077,10 @@ struct DebruijnGraph :
 
 			// std::cerr << decode(L.from) << " " << decode(L.v) << " " << decode(L.to) << " " << getNode(L.v) << " " << L.off << std::endl;
 
+			#if 0
 			assert ( getNode(L.from) );
 			assert ( getNode(L.to) );
+			#endif
 
 			Node const & from = *getNode(L.from);
 			Node const & to = *getNode(L.to);
@@ -1028,15 +1109,19 @@ struct DebruijnGraph :
 				while ( h < tmpo && Atmpp[l].first == Atmpp[h].first )
 					++h;
 
+				#if 0
 				assert ( h-l <= 2 );
+				#endif
 
 				if ( h-l > 1 )
 				{
 					// position on to node
 					uint64_t const pp = Atmpp[l].first;
 
+					#if 0
 					// sanity check
 					assert ( pp >= s );
+					#endif
 
 					uint64_t const p = pp - s + L.off;
 					double const weight = Atmpp[l].second + Atmpp[h-1].second;
@@ -1093,7 +1178,7 @@ struct DebruijnGraph :
 	}
 
 	// filter out all kmers occuring less than f times
-	void filterFreq(uint64_t const f)
+	void filterFreq(uint64_t const f, uint64_t const no)
 	{
 		clearNodeCache();
 
@@ -1106,9 +1191,9 @@ struct DebruijnGraph :
 
 		setupNodeCache();
 
-		setupAddHeap();
+		setupAddHeap(no);
 
-		check();
+		// check();
 	}
 
 	// print bits in a word (MSB to LSB)
@@ -1661,15 +1746,30 @@ struct DebruijnGraph :
 		}
 	}
 
-	void setupAddHeap()
+	void toDot(std::ostream & out) const
 	{
+		out << "digraph gdot {\n";
 		for ( uint64_t z = 0; z < numnodes; ++z )
 		{
-			Node & node = nodes[z];
-			node.numsucc = 0;
-			node.numsuccactive = 0;
-		}
+			Links L;
+			Node const & node = nodes[z];
+			getActiveSuccessors(node.v,L);
 
+			for ( uint64_t i = 0; i < L.size(); ++i )
+			{
+				uint64_t const from = node.v;
+				uint64_t const sym = L.getSym(i);
+				uint64_t const to = ((from << 2) & ((1<<(2*kmersize))-1)) | sym;
+
+				out << "\t" << decode(from) << " -> " << decode(to) << "\n";
+			}
+		}
+		out << "}\n";
+	}
+
+	template<bool check>
+	void setNodesActive(uint64_t const lim)
+	{
 		Links L;
 
 		for ( uint64_t z = 0; z < numnodes; ++z )
@@ -1687,7 +1787,15 @@ struct DebruijnGraph :
 				while (
 					node.numsuccactive < L.size()
 					&&
-					L.getFreq(node.numsuccactive) >= L.getFreq(0)/2
+					(
+						#if 1
+						(L.getFreq(node.numsuccactive) >= L.getFreq(0)/2)
+						||
+						(check && (L.getFreq(node.numsuccactive) >= lim))
+						#else
+						L.getFreq(node.numsuccactive)
+						#endif
+					)
 				)
 					++node.numsuccactive;
 
@@ -1703,8 +1811,34 @@ struct DebruijnGraph :
 			}
 		}
 
+	}
+
+	#define DEBRUIJN_GRAPH_PRELOAD
+
+	void setupAddHeap(
+		uint64_t const
+		#if defined(DEBRUIJN_GRAPH_PRELOAD)
+			no
+		#endif
+	)
+	{
+		for ( uint64_t z = 0; z < numnodes; ++z )
+		{
+			Node & node = nodes[z];
+			node.numsucc = 0;
+			node.numsuccactive = 0;
+		}
+
+		#if defined(DEBRUIJN_GRAPH_PRELOAD)
+		if ( p )
+			setNodesActive<true>(KL.getLimit(no));
+		else
+		#endif
+			setNodesActive<false>(0);
+
 		EAH.clear();
 
+		Links L;
 		for ( uint64_t z = 0; z < numnodes; ++z )
 		{
 			Node const & node = nodes[z];
@@ -2189,7 +2323,7 @@ struct DebruijnGraph :
 
 		setupNodes();
 
-		setupAddHeap();
+		setupAddHeap(o);
 
 		#if 0
 		check();
@@ -2201,20 +2335,51 @@ struct DebruijnGraph :
 	#define REVERSE_PATH_HEAP_SIZE 12
 	#define PATH_HEAP_SIZE 12
 
+	struct APathHeapEntry
+	{
+		double weight;
+		uint64_t id;
+
+		APathHeapEntry() {}
+		APathHeapEntry(
+			double const rweight,
+			uint64_t const rid
+		) : weight(rweight), id(rid) {}
+
+		bool operator<(APathHeapEntry const & O) const
+		{
+			return weight < O.weight;
+		}
+	};
+
+	libmaus2::util::FiniteSizeHeap<APathHeapEntry> HA;
+	libmaus2::util::FiniteSizeHeap<APathHeapEntry> HB;
 
 	// constructor
-	DebruijnGraph()
+	DebruijnGraph(double const rp, KmerLimit const & rKL)
 	:
-	  kbuckethist(kbuckets * kbucketrounds), seqlenhist(256), seqlenhistset(seqlenhist.size()),
+	  p(rp), p_k(libmaus2::math::gpow(p,kmersize)), KL(rKL), kbuckethist(kbuckets * kbucketrounds), seqlenhist(256), seqlenhistset(seqlenhist.size()),
 	  m(libmaus2::math::lowbits(2*kmersize)), numnodes(0), EAH(1024), stretchBV(0), markBV(0), conso(0),
 	  nodecache(1ull << (2*kmersize),false),
-	  PQ(1024), SIQ(1024), maxkmerpos(0), maxstretchlength(0), ARPHo(0), Apathheapo(0),
+	  PQ(1024), SIQ(1024),
+	  ARWR_RMQ(new libmaus2::rmq::QuickDynamicRMQ < uint64_t const * >),
+	  ARWWT(new wt_type(reinterpret_cast<uint64_t const *>(0),0)),
+	  maxkmerpos(0), maxstretchlength(0), ARPHo(0),
+	  #if 0
+	  Apathheapo(0),
+	  #endif
 	  RPST(1024), CDH(CDH_SIZE), CH(CD_SIZE), maxsupto(0),
 	  SNP(DebruijnGraphBase::getAligner()),
-	  algn(libmaus2::lcs::AlignmentOneAgainstManyFactory::uconstruct())
+	  algn(libmaus2::lcs::AlignmentOneAgainstManyFactory::uconstruct()),
+	  HA(PATH_HEAP_SIZE),
+	  HB(PATH_HEAP_SIZE)
 	{
 		std::fill(seqlenhist.begin(),seqlenhist.end(),0ull);
 		std::fill(nodecache.begin(),nodecache.end(),-1);
+
+		#if 0
+		std::cerr << "i=" << i << " lim=" << getLimit(i) << std::endl;
+		#endif
 	}
 
 	virtual ~DebruijnGraph() {}
@@ -2337,9 +2502,33 @@ struct DebruijnGraph :
 		return false;
 	}
 
+	// get edge weight for from -> to (zero for no edge)
+	uint64_t getActiveEdgeWeight(uint64_t const from, uint64_t const to) const
+	{
+		Links L;
+		getActiveSuccessors(from,L);
+
+		// prefix for successors
+		uint64_t const masked = (from << 2)&m;
+
+		for ( uint64_t i = 0; i < L.size(); ++i )
+		{
+			uint64_t const candto = masked | L.getSym(i);
+			if ( to == candto )
+				return L.getFreq(i);
+		}
+
+		return 0;
+	}
+
 	bool isEdgeActiveVirtual(uint64_t const from, uint64_t const to) const
 	{
 		return isEdgeActive(from,to);
+	}
+
+	uint64_t getActiveEdgeWeightVirtual(uint64_t const from, uint64_t const to) const
+	{
+		return getActiveEdgeWeight(from,to);
 	}
 
 	// get predecessors for v
@@ -2778,7 +2967,7 @@ struct DebruijnGraph :
 
 					if ( debug )
 					{
-						std::cerr << "refk=" << decode(refk) << " loop=" << (stretch.first==stretch.last) << " ";
+						std::cerr << "[computeStretches] refk=" << decode(refk) << " loop=" << (stretch.first==stretch.last) << " ";
 						printStretch(stretch,std::cerr); // << " len " << len << " weight " << weight << " stretch " << stretch
 					}
 
@@ -3392,6 +3581,9 @@ struct DebruijnGraph :
 
 		if ( getNode(last) )
 		{
+			if ( debug )
+				std::cerr << "RPST.push(last)" << std::endl;
+
 			RPST.push(
 				ReversePath(
 					0 /* len */,
@@ -3418,12 +3610,11 @@ struct DebruijnGraph :
 				printReversePathStringOnly(RP)
 			);
 
-			if ( pr )
-				std::cerr << "handling " << printReversePathStringOnly(RP) << std::endl;
 			#endif
+			if ( debug )
+				std::cerr << "\thandling " << printReversePathStringOnly(RP) << std::endl;
 
 			uint64_t const srcbaselen = RP.baselen;
-
 
 			while ( expect_false(!(srcbaselen < ARPHo)) )
 			{
@@ -3481,6 +3672,9 @@ struct DebruijnGraph :
 
 			if ( RP.len == 0 )
 			{
+				if ( debug )
+					std::cerr << "\t\textending first" << std::endl;
+
 				for ( uint64_t i = 0; i < stretcho; ++i )
 					if ( stretches[i].last == last )
 					{
@@ -3511,6 +3705,11 @@ struct DebruijnGraph :
 					std::pair<uint64_t,uint64_t>(laststretchid,0),
 					PairFirstComparator()
 				);
+
+
+				if ( debug )
+					std::cerr << "\t\textending non first, candidates " << EP.second-EP.first << std::endl;
+
 				for ( std::pair<uint64_t,uint64_t> const * p = EP.first; p != EP.second; ++p )
 				{
 					assert ( p->first == laststretchid );
@@ -3532,6 +3731,11 @@ struct DebruijnGraph :
 						RPST.pushBump(RPE);
 				}
 			}
+			else
+			{
+				if ( debug )
+					std::cerr << "\t\tnot extending because long enough" << std::endl;
+			}
 		}
 
 		// reverse ReversePath objects by (first,baselen)
@@ -3552,13 +3756,13 @@ struct DebruijnGraph :
 			ARWR [ ARWT[i].second ] = ARPo - i - 1;
 		}
 
-		libmaus2::rmq::QuickDynamicRMQ < uint64_t const * >::unique_ptr_type tARWR_RMQ(
-			new libmaus2::rmq::QuickDynamicRMQ < uint64_t const * >(ARWR.begin(),ARPo)
-		);
-		ARWR_RMQ = UNIQUE_PTR_MOVE(tARWR_RMQ);
+		ARWR_RMQ->init(ARWR.begin(),ARPo);
 
+		#if 0
 		wt_ptr_type twt(new wt_type(ARW.begin(),ARPo));
 		ARWWT = UNIQUE_PTR_MOVE(twt);
+		#endif
+		ARWWT->init(ARW.begin(),ARPo,ARWWT_context);
 
 		#if 0
 		ARWR_RMQ->regressionTest();
@@ -3573,12 +3777,13 @@ struct DebruijnGraph :
 		std::cerr << std::endl;
 		#endif
 
-		#if 0
-		std::cerr << std::string(80,'B') << std::endl;
-		for ( uint64_t i = 0; i < ARPo; ++i )
-			printReversePath(ARP[i],std::cerr);
-		std::cerr << std::string(80,'E') << std::endl;
-		#endif
+		if ( debug )
+		{
+			std::cerr << std::string(80,'B') << std::endl;
+			for ( uint64_t i = 0; i < ARPo; ++i )
+				printReversePath(ARP[i],std::cerr);
+			std::cerr << std::string(80,'E') << std::endl;
+		}
 	}
 
 	/**
@@ -3639,9 +3844,16 @@ struct DebruijnGraph :
 				++p;
 
 			uint64_t const e = (DP.firstsign + DP.V.size());
+			#if 0
 			double dprr = 0.0;
 			for ( ; p != pe && p->pos < e; ++p )
 				dprr += p->freq * DP.V[ p->pos - DP.firstsign ];
+			#else
+			uint64_t uprr = 0;
+			for ( ; p != pe && p->pos < e; ++p )
+				uprr += p->freq * DP.VS[ p->pos - DP.firstsign ];
+			double const dprr = static_cast<double>(uprr) / DP.getMult();
+			#endif
 
 			return dprr;
 		}
@@ -3672,9 +3884,16 @@ struct DebruijnGraph :
 				++p;
 
 			uint64_t const e = (DP.firstsign + DP.V.size());
+			#if 0
 			double dprr = 0.0;
 			for ( ; p != pe && p->pos < e; ++p )
 				dprr += p->freq * DP.V[ p->pos - DP.firstsign ];
+			#else
+			uint64_t uprr = 0;
+			for ( ; p != pe && p->pos < e; ++p )
+				uprr += p->freq * DP.VS[ p->pos - DP.firstsign ];
+			double const dprr = static_cast<double>(uprr) / DP.getMult();
+			#endif
 
 			return dprr;
 		}
@@ -3969,6 +4188,28 @@ struct DebruijnGraph :
 		ostr.put('\n');
 	}
 
+	void printStretches(std::ostream & ostr) const
+	{
+		for ( uint64_t i = 0; i < stretcho; ++i )
+		{
+			ostr << "stretches[" << i << "]=";
+			printStretch(stretches[i],ostr);
+			// ostr << std::endl;
+		}
+	}
+
+	void printStretches(uint64_t const first, std::ostream & ostr) const
+	{
+		Stretch ref; ref.first = first;
+		std::pair<Stretch const *,Stretch const *> P = std::equal_range(stretches.begin(),stretches.begin()+stretcho,ref,StretchesFirstComparator());
+		for ( Stretch const * p = P.first; p != P.second; ++p )
+		{
+			ostr << "\t";
+			printStretch(*p,ostr);
+			// ostr << "\n";
+		}
+	}
+
 	void printNode(Node const & S, std::ostream & ostr) const
 	{
 		Links L;
@@ -3991,19 +4232,21 @@ struct DebruijnGraph :
 		return ostr.str();
 	}
 
-	void printPath(Path const & P, std::ostream & ostr) const
+	void printPath(Path const & P, std::ostream & ostr, std::string const & indent = std::string()) const
 	{
-		ostr << "Path " << P << " length " << P.pos+kmersize << " " << std::endl;
+		ostr << indent << "Path " << P << " length " << P.pos+kmersize << " " << std::endl;
 
 		for ( uint64_t i = 0; i < P.len; ++i )
 		{
 			uint64_t const s = AP[P.off + i - 0];
+			ostr << indent;
 			printStretch(stretches[s],ostr);
 		}
 
 		if ( P.len )
 		{
 			uint64_t const firststretch = AP[P.off];
+			ostr << indent << "PathString=";
 			ostr << decode( stretches[firststretch].first );
 
 			for ( uint64_t i = 0; i < P.len; ++i )
@@ -4143,6 +4386,107 @@ struct DebruijnGraph :
 		}
 	}
 
+	struct APath
+	{
+		uint64_t node;
+		int64_t prev;
+		uint64_t length;
+		double weight;
+
+		APath() : prev(-1) {}
+		APath(
+			uint64_t const rnode,
+			int64_t const rprev,
+			uint64_t const rlength,
+			double const rweight
+		)
+		: node(rnode), prev(rprev), length(rlength), weight(rweight)
+		{
+
+		}
+
+		std::string toString() const
+		{
+			std::ostringstream ostr;
+
+			ostr << "APath(node=" << node << ",prev=" << prev << ",length=" << length << ",weight=" << weight << ")";
+
+			return ostr.str();
+		}
+	};
+
+
+	libmaus2::autoarray::AutoArray<APath> Aapath;
+
+	struct ConsensusCandidateId
+	{
+		uint64_t o;
+		uint64_t l;
+		double error;
+		int64_t id;
+
+		ConsensusCandidateId()
+		{
+
+		}
+
+		ConsensusCandidateId(uint64_t const ro, uint64_t const rl, double const rerror, int64_t const rid)
+		: o(ro), l(rl), error(rerror), id(rid)
+		{
+
+		}
+
+		std::string toString() const
+		{
+			std::ostringstream ostr;
+
+			ostr << "ConsensusCandidateId(o=" << o << ",l=" << l << ",error=" << error << ",id=" << id << ")";
+
+			return ostr.str();
+		}
+	};
+
+	struct ConsensusCandidateIdComparator
+	{
+		libmaus2::autoarray::AutoArray<APath> const * Aapath;
+
+		ConsensusCandidateIdComparator() : Aapath(0) {}
+		ConsensusCandidateIdComparator(libmaus2::autoarray::AutoArray<APath> const * rAapath) : Aapath(rAapath) {}
+
+		static bool compare(
+			APath const * P,
+			int64_t aid,
+			int64_t bid
+		)
+		{
+			assert ( aid >= 0 );
+			assert ( bid >= 0 );
+
+			// std::cerr << "Compare " << P[aid].toString() << " to " << P[bid].toString() << std::endl;
+
+			while ( P[aid].length != P[bid].length )
+			{
+				if ( P[aid].length < P[bid].length )
+					bid = P[bid].prev;
+				else
+					aid = P[aid].prev;
+
+				assert ( aid >= 0 );
+				assert ( bid >= 0 );
+			}
+
+			assert ( P[aid].length == P[bid].length );
+
+			// std::cerr << "Turned to " << P[aid].toString() << " to " << P[bid].toString() << std::endl;
+
+			return P[aid].weight < P[bid].weight;
+		}
+
+		bool operator()(ConsensusCandidateId const & A, ConsensusCandidateId const & B) const
+		{
+			return compare(Aapath->begin(),A.id,B.id);
+		}
+	};
 
 	/**
 	 * traverse graph and compute consensus
@@ -4161,7 +4505,7 @@ struct DebruijnGraph :
 			MAo
 			#endif
 			,
-		uint64_t const maxfrontpath,
+		uint64_t const /* maxfrontpath */,
 		uint64_t const maxfullpath
 	)
 	{
@@ -4203,18 +4547,255 @@ struct DebruijnGraph :
 				std::cerr << "ignoring last " << maxLast[maxLastI].second << " " << decode(maxLast[maxLastI].second) << " freq " << maxLast[maxLastI].first << std::endl;
 		}
 
-		#if 0
-		std::cerr << "maxFirstO=" << maxFirstO << " maxLastO=" << maxLastO << std::endl;
-		#endif
+		// #define DEBRUIJNGRAPH_SINGLE_NODE_TRAVERSAL
+
+		#if defined(DEBRUIJNGRAPH_SINGLE_NODE_TRAVERSAL)
+		uint64_t Aapatho = 0;
+		libmaus2::util::FiniteSizeHeap<APathHeapEntry> * pHA = &HA;
+		libmaus2::util::FiniteSizeHeap<APathHeapEntry> * pHB = &HB;
+		pHA->clear();
+		pHB->clear();
+
+		ConsensusCandidateIdComparator FCDHcomp(&Aapath);
+		libmaus2::util::FiniteSizeHeap<ConsensusCandidateId,ConsensusCandidateIdComparator> FCDH(CDH_SIZE,FCDHcomp);
+
+		for ( uint64_t maxFirstI = 0; maxFirstI < maxFirstO; ++maxFirstI )
+		{
+			uint64_t const vnode = maxFirst[maxFirstI].second;
+			Node const & node = *(getNode(vnode));
+
+			for ( uint64_t i = 0; i < node.numfeaspos; ++i )
+			{
+				std::pair<uint64_t,double> const & FP = Afeaspos [ node.feaspos + i ];
+
+				if ( FP.first == 0 )
+				{
+					if ( pHA->full() )
+					{
+						assert ( ! pHA->empty() );
+						if ( FP.second > pHA->top().weight )
+							pHA->pop();
+					}
+					if ( ! pHA->full() )
+					{
+						APath AP(vnode,-1 /* prev */,0 /* length of path in edges */,FP.second);
+						uint64_t const APid = Aapatho;
+						Aapath.push(Aapatho,AP);
+						pHA->push(APathHeapEntry(FP.second,APid));
+					}
+				}
+			}
+		}
+
+		while ( !pHA->empty() )
+		{
+			// std::cerr << "entering loop for length " << Aapath[pHA->top().id].length << " lmin=" << lmin << " lmax=" << lmax << std::endl;
+
+			while ( !pHA->empty() )
+			{
+				APathHeapEntry APE = pHA->top();
+				pHA->pop();
+				APath const AP = Aapath[APE.id];
+
+				// std::cerr << "handling entry for node " << AP.node << " weight " << APE.weight << " length " << AP.length << std::endl;
+
+				if ( AP.length+kmersize >= lmin )
+				{
+					bool found = false;
+					for ( uint64_t maxLastI = 0; maxLastI < maxLastO; ++maxLastI )
+						if ( AP.node == maxLast[maxLastI].second )
+							found = true;
+
+					if ( found )
+					{
+						if ( FCDH.full() )
+						{
+							assert ( ! FCDH.empty() );
+
+							if (
+								ConsensusCandidateIdComparator::compare(Aapath.begin(),FCDH.top().id,APE.id)
+							)
+							{
+								if ( Aapath[FCDH.top().id].weight > Aapath[APE.id].weight )
+									std::cerr << "dropping " << Aapath[FCDH.top().id].toString() << " for " << Aapath[APE.id].toString() << std::endl;
+
+								FCDH.pop();
+							}
+
+
+						}
+
+						if ( ! FCDH.full() )
+						{
+							int64_t id = APE.id;
+
+							uint64_t const conslen = Aapath[id].length + kmersize;
+							uint64_t const consstart = conso;
+							Acons.ensureSize(conso + conslen);
+							conso += conslen;
+							uint8_t * it = Acons.begin() + conso;
+
+							{
+								APath const & AP = Aapath[id];
+								uint64_t node = AP.node;
+
+								for ( uint64_t i = 0; i < kmersize; ++i, node >>= 2 )
+									*(--it) = libmaus2::fastx::remapChar(
+										node & 3
+									);
+								id = AP.prev;
+							}
+
+							while ( id >= 0 )
+							{
+								APath const & AP = Aapath[id];
+
+								*(--it) = libmaus2::fastx::remapChar((AP.node >> (2*(kmersize-1)))&3);
+
+								id = AP.prev;
+
+							}
+
+							assert ( it == Acons.begin() + consstart );
+
+							// std::cerr << "CAND " << std::string(Acons.begin()+consstart,Acons.begin()+consstart+conslen) << " weight " << APE.weight << std::endl;
+
+							// construct candidate object
+							FCDH.push(ConsensusCandidateId(consstart,conslen,0.0 /* error */,APE.id));
+						}
+
+						#if 0
+						if ( CDH.full() )
+						{
+							assert ( ! CDH.empty() );
+							if ( APE.weight > CDH.top().weight )
+								CDH.pop();
+						}
+
+						if ( ! CDH.full() )
+						{
+							int64_t id = APE.id;
+
+							uint64_t const conslen = Aapath[id].length + kmersize;
+							uint64_t const consstart = conso;
+							Acons.ensureSize(conso + conslen);
+							conso += conslen;
+							uint8_t * it = Acons.begin() + conso;
+
+							{
+								APath const & AP = Aapath[id];
+								uint64_t node = AP.node;
+
+								for ( uint64_t i = 0; i < kmersize; ++i, node >>= 2 )
+									*(--it) = libmaus2::fastx::remapChar(
+										node & 3
+									);
+								id = AP.prev;
+							}
+
+							while ( id >= 0 )
+							{
+								APath const & AP = Aapath[id];
+
+								*(--it) = libmaus2::fastx::remapChar((AP.node >> (2*(kmersize-1)))&3);
+
+								id = AP.prev;
+
+							}
+
+							assert ( it == Acons.begin() + consstart );
+
+							// std::cerr << "CAND " << std::string(Acons.begin()+consstart,Acons.begin()+consstart+conslen) << " weight " << APE.weight << std::endl;
+
+							// construct candidate object
+							CDH.push(ConsensusCandidate(consstart,conslen,APE.weight,0.0 /* error */));
+						}
+						#endif
+					}
+				}
+				if ( AP.length+kmersize + 1 <= lmax )
+				{
+					Links L;
+					getActiveSuccessors(AP.node,L);
+
+					for ( uint64_t i = 0; i < L.size(); ++i )
+					{
+						uint64_t const sym = L.getSym(i);
+						uint64_t const vnode = ((AP.node << 2) & ((1<<(2*kmersize))-1)) | sym;
+						assert ( getNode(vnode) );
+						Node const & node = *(getNode(vnode));
+
+						for ( uint64_t i = 0; i < node.numfeaspos; ++i )
+						{
+							std::pair<uint64_t,double> const & FP = Afeaspos [ node.feaspos + i ];
+
+							if ( FP.first == AP.length+1 )
+							{
+								double const nweight = APE.weight + FP.second;
+
+								if ( pHB->full() )
+								{
+									assert ( ! pHB->empty() );
+									if ( nweight > pHB->top().weight )
+										pHB->pop();
+								}
+								if ( ! pHB->full() )
+								{
+									APath APN(vnode,APE.id /* prev */,AP.length+1 /* length of path in bases */,nweight);
+									uint64_t const APid = Aapatho;
+									Aapath.push(Aapatho,APN);
+									pHB->push(APathHeapEntry(nweight,APid));
+								}
+							}
+						}
+
+					}
+				}
+			}
+
+			std::swap(pHA,pHB);
+		}
+
+		// std::cerr << std::string(80,'-') << std::endl;
+		while ( !FCDH.empty() )
+		{
+			ConsensusCandidateId const CID = FCDH.top();
+			FCDH.pop();
+			int64_t const id = CID.id;
+			APath const & AP = Aapath[id];
+
+			// std::cerr << "copy " << CID.toString() << std::endl;
+
+			CDH.push(ConsensusCandidate(CID.o,CID.l,AP.weight,0.0 /* error */));
+		}
+
+		#else // stretch based
 
 		uint64_t const threscnt = 3;
 		uint64_t const thresden = 4;
 		uint64_t const firstthres = maxFirstO ? (maxFirst[0].first*threscnt)/thresden : 0;
 		uint64_t const lastthres = maxLastO ? (maxLast[0].first*threscnt)/thresden : 0;
 
+		#if 0
+		std::cerr << "maxFirstO=" << maxFirstO << " maxLastO=" << maxLastO << std::endl;
+		#endif
+
 		for ( uint64_t maxFirstI = 0; maxFirstI < maxFirstO && maxFirst[maxFirstI].first >= firstthres; ++maxFirstI )
 			for ( uint64_t maxLastI = 0; maxLastI < maxLastO && maxLast[maxLastI].first >= lastthres; ++maxLastI )
 			{
+				#if 0
+				uint64_t const refk = node.v;
+
+				uint64_t const numpred = getNumActivePredecessors(refk);
+				uint64_t const numsucc = node.numsuccactive;
+
+				if ( numsucc && (numpred != 1 || numsucc > 1) )
+				{
+					Links L;
+					getActiveSuccessors(refk,L);
+				}
+				#endif
+
 				if ( debug )
 					std::cerr << "first freq " << maxFirst[maxFirstI].first <<  " word " << decode(maxFirst[maxFirstI].second) << " last freq " << maxLast[maxLastI].first <<  " word " << decode(maxLast[maxLastI].second) << std::endl;
 
@@ -4249,137 +4830,214 @@ struct DebruijnGraph :
 				uint64_t APoclean = 0;
 				#endif
 
-				for ( uint64_t i = 0; i < stretcho; ++i )
-					if ( stretches[i].first == first )
-						PQ.pushBump(extendPath(Path(),i));
-
-				SIQ.clear();
-
+				#if 0
 				for ( uint64_t i = 0; i < Apathheapo; ++i )
 					Apathheap[i]->clear();
+				#endif
 
-				for ( uint64_t numfrontpath = 0 ; (!PQ.empty()) && (numfrontpath < maxfrontpath) ; )
-				{
-					Path const P = PQ.top();
-					PQ.pop();
-
-					while ( expect_false(!(P.baselen < Apathheapo)) )
+				for ( uint64_t i = 0; i < stretcho; ++i )
+					if ( stretches[i].first == first )
 					{
-						libmaus2::util::FiniteSizeHeap<Path,PathWeightHeapComparator>::shared_ptr_type NH(
-							new libmaus2::util::FiniteSizeHeap<Path,PathWeightHeapComparator>(PATH_HEAP_SIZE)
-						);
-						Apathheap.push(Apathheapo,NH);
-					}
-					assert ( P.baselen < Apathheapo );
-					if ( Apathheap[P.baselen]->full() )
-					{
-						assert ( ! Apathheap[P.baselen]->empty() );
+						Path const P = extendPath(Path(),i);
 
-						if ( P.weight <= Apathheap[P.baselen]->top().weight )
+						while ( !(P.baselen < APQ.size()) )
 						{
-							continue;
+							libmaus2::util::FiniteSizeHeap<Path,PathWeightComparator>::shared_ptr_type tptr(new libmaus2::util::FiniteSizeHeap<Path,PathWeightComparator>(PATH_HEAP_SIZE));
+							APQ.push_back(tptr);
+						}
+
+						assert ( P.baselen < APQ.size() );
+
+						if ( APQ[P.baselen]->full() )
+						{
+							if ( P.weight > APQ[P.baselen]->top().weight )
+							{
+								APQ[P.baselen]->pop();
+								APQ[P.baselen]->push(P);
+							}
 						}
 						else
 						{
-							assert ( P.weight > Apathheap[P.baselen]->top().weight );
-							Apathheap[P.baselen]->pop();
+							APQ[P.baselen]->push(P);
 						}
 					}
-					assert ( ! Apathheap[P.baselen]->full() );
-					Apathheap[P.baselen]->push(P);
 
-					// printPath(P,std::cerr);
+				SIQ.clear();
 
-					assert ( P.len );
-
-					// length of candidate stretch in bases
-					int64_t const candlen = P.pos + kmersize;
-					assert ( candlen == static_cast<int64_t>(P.baselen) );
-
-					// reference object
-					ReversePath RP;
-					RP.front = stretches[AP[P.off + P.len - 1]].last;
-
+				// uint64_t numfrontpath = 0;
+				for ( uint64_t zz = 0; zz < APQ.size(); ++zz )
+				{
 					#if 0
-					for ( uint64_t i = 1; i < ARPo; ++i )
-						assert ( ARP[i-1].front <= ARP[i].front );
+					if ( APQ[zz]->f >= 8 )
+					{
+						std::cerr << "APQ[" << zz << "]->f=" << APQ[zz]->f << " / " << PATH_HEAP_SIZE << std::endl;
+					}
 					#endif
 
-					std::pair < ReversePath const *, ReversePath const *> RPP = std::equal_range(ARP.begin(),ARP.begin()+ARPo,RP,ReversePathFrontComparator());
-
-					RP.baselen = std::max(lmin + static_cast<int64_t>(kmersize) - candlen,static_cast<int64_t>(0));
-					ReversePath const * subRPP =std::lower_bound(RPP.first,RPP.second,RP,ReversePathBaseLenComparator());
-
-					assert ( subRPP == RPP.first  || static_cast<int64_t>(subRPP[-1].baselen) + candlen - kmersize < lmin );
-					assert ( subRPP == RPP.second || static_cast<int64_t>(subRPP->baselen) + candlen - kmersize >= lmin );
-
-					RP.baselen = std::max(lmax + static_cast<int64_t>(kmersize) - candlen,static_cast<int64_t>(0));
-					ReversePath const * supRPP = std::upper_bound(subRPP,RPP.second,RP,ReversePathBaseLenComparator());
-					assert ( supRPP == RPP.second || static_cast<int64_t>(supRPP->baselen) + candlen - kmersize > lmax );
-
-					if ( subRPP != supRPP )
+					// for ( uint64_t numfrontpath = 0 ; (!PQ.empty()) && (numfrontpath < maxfrontpath) ; )
+					while ( ! APQ[zz]->empty() )
 					{
-						SIQ.pushBump(getPrimaryScoreInterval(subRPP - ARP.begin(),supRPP - ARP.begin(),P));
-						++numfrontpath;
-					}
+						Path const P = APQ[zz]->top();
+						APQ[zz]->pop();
 
-					if ( debug )
-					{
-						std::cerr << "processing " << P << " length " << P.pos+kmersize << " " << std::endl;
-						printPath(P, std::cerr);
-					}
-
-
-					uint64_t const Plaststretchid = AP[P.off + P.len - 1];
-					Stretch ref; ref.first = stretches[Plaststretchid].last;
-					Stretch * a = stretches.begin();
-					Stretch * e = stretches.begin()+stretcho;
-					std::pair<Stretch *,Stretch *> ER = std::equal_range(a,e,ref,StretchesFirstComparator());
-
-					if (
-						P.baselen < kmersize ||
-						(
-							static_cast<int64_t>(P.baselen - kmersize) < ((lmax+1)/2)
-						)
-					)
-					{
-						for ( Stretch * p = ER.first; p != ER.second; ++p )
+						#if 0
+						while ( expect_false(!(P.baselen < Apathheapo)) )
 						{
-							uint64_t const addstretchid = p-a;
+							libmaus2::util::FiniteSizeHeap<Path,PathWeightHeapComparator>::shared_ptr_type NH(
+								new libmaus2::util::FiniteSizeHeap<Path,PathWeightHeapComparator>(PATH_HEAP_SIZE)
+							);
+							Apathheap.push(Apathheapo,NH);
+						}
+						assert ( P.baselen < Apathheapo );
+						if ( Apathheap[P.baselen]->full() )
+						{
+							assert ( ! Apathheap[P.baselen]->empty() );
 
-							if ( debug )
-								std::cerr << "adding stretch " << stretches[addstretchid]
-									<< " first=" << decode(stretches[addstretchid].first)
-									<< " ext=" << decode(stretches[addstretchid].ext)
-									<< " last=" << decode(stretches[addstretchid].last)
-									<< std::endl;
-
-							StretchFeasObject const * SFO = getCachedStretchPositionWeight(addstretchid,P.pos);
-							double const eweight = SFO ? SFO->w : 0.0;
-							double const eweightthres = 0.1;
-
-							if ( eweight > eweightthres )
+							if ( P.weight <= Apathheap[P.baselen]->top().weight )
 							{
-								Path EP = extendPath(P,addstretchid);
-
-								//std::cerr << "EP.weight=" << EP.weight << " EP.len=" << EP.len << " eweight=" << eweight << std::endl;
-
-								//assert ( EP.weight >= eweight );
-
-								if ( EP.weight > eweightthres && static_cast<int64_t>(EP.pos + kmersize) <= lmax )
-									PQ.pushBump(EP);
+								continue;
+							}
+							else
+							{
+								assert ( P.weight > Apathheap[P.baselen]->top().weight );
+								Apathheap[P.baselen]->pop();
 							}
 						}
-					}
+						assert ( ! Apathheap[P.baselen]->full() );
+						Apathheap[P.baselen]->push(P);
+						#endif
 
-					#if 0
-					APoclean += P.len;
-					if ( APoclean >= APo/2 )
-					{
-						compactPathData(PQ);
-						APoclean = 0;
+						// printPath(P,std::cerr);
+
+						assert ( P.len );
+
+						// length of candidate stretch in bases
+						int64_t const candlen = P.pos + kmersize;
+						assert ( candlen == static_cast<int64_t>(P.baselen) );
+
+						// reference object
+						ReversePath RP;
+						RP.front = stretches[AP[P.off + P.len - 1]].last;
+
+						#if 0
+						for ( uint64_t i = 1; i < ARPo; ++i )
+							assert ( ARP[i-1].front <= ARP[i].front );
+						#endif
+
+						std::pair < ReversePath const *, ReversePath const *> RPP = std::equal_range(ARP.begin(),ARP.begin()+ARPo,RP,ReversePathFrontComparator());
+
+						RP.baselen = std::max(lmin + static_cast<int64_t>(kmersize) - candlen,static_cast<int64_t>(0));
+						ReversePath const * subRPP = std::lower_bound(RPP.first,RPP.second,RP,ReversePathBaseLenComparator());
+
+						assert ( subRPP == RPP.first  || static_cast<int64_t>(subRPP[-1].baselen) + candlen - kmersize < lmin );
+						assert ( subRPP == RPP.second || static_cast<int64_t>(subRPP->baselen) + candlen - kmersize >= lmin );
+
+						RP.baselen = std::max(lmax + static_cast<int64_t>(kmersize) - candlen,static_cast<int64_t>(0));
+						ReversePath const * supRPP = std::upper_bound(subRPP,RPP.second,RP,ReversePathBaseLenComparator());
+						assert ( supRPP == RPP.second || static_cast<int64_t>(supRPP->baselen) + candlen - kmersize > lmax );
+
+						if ( subRPP != supRPP )
+						{
+							SIQ.pushBump(getPrimaryScoreInterval(subRPP - ARP.begin(),supRPP - ARP.begin(),P));
+							// ++numfrontpath;
+						}
+
+						if ( debug )
+						{
+							std::cerr << "processing " << P << " length " << P.pos+kmersize << " " << std::endl;
+							printPath(P, std::cerr, std::string("\t"));
+						}
+
+						uint64_t const Plaststretchid = AP[P.off + P.len - 1];
+						Stretch ref; ref.first = stretches[Plaststretchid].last;
+						Stretch * a = stretches.begin();
+						Stretch * e = stretches.begin()+stretcho;
+						std::pair<Stretch *,Stretch *> ER = std::equal_range(a,e,ref,StretchesFirstComparator());
+
+						if (
+							P.baselen < kmersize ||
+							(
+								static_cast<int64_t>(P.baselen - kmersize) < ((lmax+1)/2)
+							)
+						)
+						{
+							for ( Stretch * p = ER.first; p != ER.second; ++p )
+							{
+								uint64_t const addstretchid = p-a;
+
+								if ( debug )
+									std::cerr << "\t\t" << "adding stretch " << stretches[addstretchid]
+										<< " first=" << decode(stretches[addstretchid].first)
+										<< " ext=" << decode(stretches[addstretchid].ext)
+										<< " last=" << decode(stretches[addstretchid].last);
+
+								StretchFeasObject const * SFO = getCachedStretchPositionWeight(addstretchid,P.pos);
+								double const eweight = SFO ? SFO->w : 0.0;
+								double const eweightthres = 0.1;
+
+								if ( debug )
+									std::cerr << " eweight=" << eweight;
+
+								if ( eweight > eweightthres )
+								{
+									Path EP = extendPath(P,addstretchid);
+
+									//std::cerr << "EP.weight=" << EP.weight << " EP.len=" << EP.len << " eweight=" << eweight << std::endl;
+
+									//assert ( EP.weight >= eweight );
+
+									if ( debug )
+										std::cerr << " EP.weight=" << EP.weight;
+
+									if ( EP.weight > eweightthres && static_cast<int64_t>(EP.pos + kmersize) <= lmax )
+									{
+										if ( debug )
+											std::cerr << " push " << (EP.pos+kmersize);
+
+										while ( !(EP.baselen < APQ.size()) )
+										{
+											libmaus2::util::FiniteSizeHeap<Path,PathWeightComparator>::shared_ptr_type tptr(new libmaus2::util::FiniteSizeHeap<Path,PathWeightComparator>(PATH_HEAP_SIZE));
+											APQ.push_back(tptr);
+										}
+
+										if ( APQ[EP.baselen]->full() )
+										{
+											if ( debug )
+												std::cerr << "HEAP FULL new " << EP.weight << " top " << APQ[EP.baselen]->top().weight << " baselen " << EP.baselen << std::endl;
+
+											if ( EP.weight > APQ[EP.baselen]->top().weight )
+											{
+												APQ[EP.baselen]->pop();
+												APQ[EP.baselen]->push(EP);
+											}
+										}
+										else
+										{
+											APQ[EP.baselen]->push(EP);
+										}
+
+									}
+									else
+									{
+										if ( debug )
+											std::cerr << " NOPUSH" << (EP.pos+kmersize);
+									}
+								}
+
+								if ( debug )
+									std::cerr << std::endl;
+							}
+						}
+
+						#if 0
+						APoclean += P.len;
+						if ( APoclean >= APo/2 )
+						{
+							compactPathData(PQ);
+							APoclean = 0;
+						}
+						#endif
 					}
-					#endif
 				}
 				double const treetime = treertc.getElapsedSeconds();
 
@@ -4437,6 +5095,7 @@ struct DebruijnGraph :
 				if ( debug )
 					std::cerr << "preptime " << preptime << " treetime " << treetime << " evaltime=" << evaltime << std::endl;
 			}
+		#endif
 
 		// std::cerr << std::string(80,'-') << std::endl;
 		CH.clear();
@@ -4485,8 +5144,12 @@ struct DebruijnGraph :
 			if ( ACC[i].error < ACC[0].error )
 				orderok = false;
 		if ( ! orderok )
+		{
+			std::cerr << std::string(80,'-') << std::endl;
+			std::cerr << "lmin=" << lmin << " lmax=" << lmax << std::endl;
 			for ( uint64_t i = 0; i < ACCo; ++i )
 				std::cerr << i << "\t" << ACC[i] << std::endl;
+		}
 		#endif
 
 		#if ! defined(CANDIDATE_AVOID_ALIGN)

@@ -27,12 +27,12 @@ struct DebruijnGraphInterface
 	virtual ~DebruijnGraphInterface() {}
 
 	virtual void setup(std::pair< uint8_t const *, uint64_t> const * I, uint64_t const o) = 0;
-	virtual void filterFreq(uint64_t const f) = 0;
+	virtual void filterFreq(uint64_t const f, uint64_t const no) = 0;
 	// static double getDefaultComputeFeasibleKmerPositionsThres() { return 1e-3; }
 	virtual void computeFeasibleKmerPositions(OffsetLikely const & offsetLikely, double const thres) = 0;
 	virtual void getLevelSuccessors(unsigned int const s) = 0;
 	virtual void setupNodes() = 0;
-	virtual void setupAddHeap() = 0;
+	virtual void setupAddHeap(uint64_t const o) = 0;
 	virtual bool addNextFromHeap(std::ostream * logstr) = 0;
 	virtual bool traverse(int64_t const lmin, int64_t const lmax, std::pair< uint8_t const *, uint64_t> const * MA, uint64_t const MAo,
 		uint64_t const maxfrontpath, uint64_t const maxfullpath) = 0;
@@ -57,5 +57,11 @@ struct DebruijnGraphInterface
 	virtual uint64_t getKmerSize() const = 0;
 	virtual std::string printNode(Node const & S) const = 0;
 	virtual std::ostream & print(std::ostream & out) const = 0;
+
+	virtual uint64_t getCandidateErrorU(std::pair< uint8_t const *, uint64_t> const * I, uint64_t const o, std::pair<uint8_t const *, uint8_t const *> Ucand) = 0;
+	virtual uint64_t getCandidateErrorU(std::pair< uint8_t const *, uint64_t> const * I, uint64_t const o, uint64_t const id) = 0;
+	virtual uint64_t getActiveEdgeWeightVirtual(uint64_t const from, uint64_t const to) const = 0;
+	virtual void printStretches(uint64_t const first, std::ostream & ostr) const = 0;
+	virtual void toDot(std::ostream & out) const = 0;
 };
 #endif

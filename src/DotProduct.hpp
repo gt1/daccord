@@ -28,16 +28,35 @@
  **/
 struct DotProduct
 {
+	static unsigned int getShift()
+	{
+		return 32;
+	}
+	static uint64_t getMult()
+	{
+		return (1ull<<getShift());
+	}
+
 	// first significant index
 	uint64_t firstsign;
 	// vector of coefficients
 	std::vector<double> V;
+	// vector of shift coefficients
+	std::vector<uint64_t> VS;
 
 	DotProduct() {}
 	DotProduct(uint64_t const rfirstsign, std::vector<double> const & rV)
 	: firstsign(rfirstsign), V(rV)
 	{
 
+	}
+
+	void computeShifted()
+	{
+		VS.resize(V.size());
+		double const mult = getMult();
+		for ( uint64_t i = 0; i < V.size(); ++i )
+			VS[i] = mult * V[i];
 	}
 
 	std::ostream & printData(std::ostream & out) const
@@ -78,7 +97,8 @@ struct DotProduct
 	}
 
 	// compute product
-	double dotproduct(std::vector < double > const & O) const
+	template<typename iterator>
+	double dotproduct(iterator O, uint64_t const Os) const
 	{
 		double s = 0;
 
@@ -89,7 +109,7 @@ struct DotProduct
 			uint64_t const j = firstsign + i;
 
 			// if j is in range for O
-			if ( j < O.size() )
+			if ( j < Os )
 				s += V[i] * O[j];
 			// j is too large, stop
 			else
@@ -97,6 +117,11 @@ struct DotProduct
 		}
 
 		return s;
+	}
+
+	double dotproduct(std::vector < double > const & O) const
+	{
+		return dotproduct(O.begin(),O.size());
 	}
 
 	// normalise the vector (make dot product between the vector and itself 1)
@@ -125,4 +150,3 @@ inline std::ostream & operator<<(std::ostream & out, DotProduct const & DP)
 	return out;
 }
 #endif
-

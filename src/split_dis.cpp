@@ -57,7 +57,7 @@
 #include <libmaus2/clustering/KMeans.hpp>
 #include <libmaus2/util/Enumerator.hpp>
 
-// #define PHASE_DEBUG
+//#define PHASE_DEBUG
 //#define PHASE_SERIAL
 //#define PHASER_HANDLE_SINGLE 534
 
@@ -65,6 +65,11 @@ static std::string getFastAIndexFileName(std::string const & consfn)
 {
 	std::string const consfnindex = consfn + ".phaser.index";
 	return consfnindex;
+}
+
+static uint64_t getDefaultKV()
+{
+	return 2;
 }
 
 std::string getTmpFileBase(libmaus2::util::ArgParser const & arg)
@@ -526,6 +531,25 @@ std::ostream & operator<<(std::ostream & out, MarkedPileElement const & A)
 	return A.toString(out);
 }
 
+#if 0
+// map alignment position (which may use RC of read) to position on original read
+static int64_t mapPos(bool const inv, int64_t const rlb, int64_t const pos)
+{
+	int64_t r;
+
+	if ( inv )
+	{
+		r = rlb - pos - 1;
+	}
+	else
+	{
+		r = pos;
+	}
+
+	return r;
+}
+#endif
+
 struct IdentityPositionMapper
 {
 	int64_t operator()(int64_t const p) const
@@ -626,6 +650,11 @@ void completeLPV(std::vector<MarkedPileElement> & LPV)
 			uint64_t hh = ll+1;
 			while ( hh < h && LPV[ll].chain == LPV[hh].chain )
 				++hh;
+
+			#if 0
+			for ( uint64_t i = ll+1; i < hh; ++i )
+				std::cerr << "[V] dropping " << LPV[i] << " for " << LPV[ll] << std::endl;
+			#endif
 
 			LPV[o++] = LPV[ll];
 
@@ -867,9 +896,12 @@ struct PhaseQueueEntryMulti
 	static int const n1 = _n1;
 
 	int64_t aseq;
+	// first interval
 	std::pair<int64_t,int64_t> VIa;
+	// second interval
 	std::pair<int64_t,int64_t> VIb;
 
+	// current values
 	int64_t I0[n0];
 	int64_t I1[n1];
 
@@ -1059,6 +1091,18 @@ struct PhaseQueueEntryMulti
 		return true;
 	}
 
+	bool sameChain(PhaseQueueEntryMulti<n0+1,n1+1> const & O, std::vector<MarkedPileElement> const & LPV) const
+	{
+		for ( int i = 0; i < n0; ++i )
+			if ( LPV[I0[i]].chain != LPV[O.I0[i]].chain  )
+				return false;
+		for ( int i = 0; i < n1; ++i )
+			if ( LPV[I1[i]].chain != LPV[O.I1[i]].chain )
+				return false;
+
+		return true;
+	}
+
 	static std::vector < std::vector < libmaus2::math::IntegerInterval<int64_t> > > getConsInterval(
 		std::vector < uint64_t > const & chainlengths,
 		std::vector < uint64_t > const & chains,
@@ -1216,31 +1260,50 @@ struct PhaseQueueEntryMulti
 
 	bool next()
 	{
+		// back to front n1
 		for ( int ii = 0; ii < n1; ++ii )
 		{
 			int const i = n1-ii-1;
 
+			// is + 1 still in range? (taking into account increments for next)
 			if ( I1[i]+1+ii < VIb.second )
 			{
+				// increment
 				++I1[i];
 
+				// reset following elements to next possible value
 				for ( int j = i+1; j < n1; ++j )
 					I1[j] = I1[i] + (j-i);
+
+				#if 0
+				for ( int j = 0; j < n1; ++j )
+					assert ( I1[j] < VIb.second );
+				#endif
 
 				return true;
 			}
 		}
+		// back to front n0
 		for ( int ii = 0; ii < n0; ++ii )
 		{
 			int const i = n0-ii-1;
 
+			// is + 1 still in range (taking into account increments for next)
 			if ( I0[i]+1+ii < VIa.second )
 			{
+				// increment
 				++I0[i];
 
+				// reset following elements to next possible value
 				for ( int j = i+1; j < n0; ++j )
 					I0[j] = I0[i] + (j-i);
 
+				#if 0
+				for ( int j = 0; j < n0; ++j )
+					assert ( I0[j] < VIa.second );
+				#endif
+
+				// reset elements of second block
 				for ( int j = 0; j < n1; ++j )
 					I1[j] = VIb.first+j;
 
@@ -1271,7 +1334,50 @@ struct PhaseQueueEntryMultiComparator
 	}
 };
 
+template<unsigned int n0, unsigned int n1>
+struct MinReq
+{
+	double const crate;
+	double const craten0n1;
+	double const drate;
+	std::map<uint64_t,uint64_t> M;
 
+	// interval size factor
+	static uint64_t getMod()
+	{
+		return 50;
+	}
+
+	MinReq(
+		// correct base rate
+		double const rcrate,
+		// difference rate
+		double const rdrate
+	) : crate(rcrate), craten0n1(::std::pow(crate,n0+n1+1)), drate(rdrate) {}
+
+	uint64_t operator[](uint64_t const i)
+	{
+		uint64_t const mod = getMod();
+		// round to interval size
+		uint64_t j = ((i + mod-1)/mod)*mod;
+
+		if ( M.find(j) == M.end() )
+			M[j] = libmaus2::math::Binom::binomRowUpperGmpFloatLimit(
+				// probability for n0+n1+1 correct bases
+				craten0n1,
+				// number of differences expected
+				std::floor(j*drate+0.5),
+				// number of bits used for computation
+				512,
+				// probability threshold
+				0.995
+			);
+
+		return M.find(j)->second;
+	}
+};
+
+template<int n0, int n1>
 void phaseChains(
 	std::ostream & err,
 	std::vector < ReadFragment > const & fragments,
@@ -1298,7 +1404,8 @@ void phaseChains(
 	double const drate,
 	uint64_t const phasethres,
 	bool const checkdisagreement,
-	uint64_t const dcthres
+	uint64_t const dcthres,
+	bool fulltuples
 	#if defined(PHASE_DEBUG)
 		,
 		BamAlignmentContainer & BAC,
@@ -1307,6 +1414,11 @@ void phaseChains(
 	#endif
 )
 {
+	#if 0
+	int const n0 = 2;
+	int const n1 = 3;
+	#endif
+
 	libmaus2::timing::RealTimeClock rtc;
 	rtc.start();
 
@@ -1390,6 +1502,21 @@ void phaseChains(
 			++clipback;
 
 		Vstat[itc-ita] = libmaus2::lcs::AlignmentTraceContainer::getAlignmentStatistics(np.ta+clipfront,np.te-clipback);
+
+		#if 0
+		err << itc->isInverse() << std::endl;
+
+		std::cerr << "clipfront=" << clipfront << " clipback=" << clipback << std::endl;
+		libmaus2::lcs::AlignmentPrint::printAlignmentLines(
+			err,
+			aref.begin(),aref.size(),bref.begin(),bref.size(),
+			80,
+			np.ta,
+			np.te
+		);
+
+		std::cerr << libmaus2::lcs::AlignmentTraceContainer::getAlignmentStatistics(np.ta+clipfront,np.te-clipback) << std::endl;
+		#endif
 	}
 	for ( uint64_t i = 0; i < numchains; ++i )
 	{
@@ -1402,6 +1529,16 @@ void phaseChains(
 			Vcstat[i] += Vstat[z];
 		}
 		Vctrue[i] = trueflag;
+	}
+	#endif
+
+	#if 0
+	for ( uint64_t i = 0; i < numchains; ++i )
+	{
+		uint64_t const len = chainlengths[i+1]-chainlengths[i];
+		err << "chain " << i << " length " << len << " stat " << Vcstat[i] << std::endl;
+		for ( uint64_t j = 0; j < len; ++j )
+			err << "\t" << ita[chains[chainlengths[i]+j]].getHeader() << std::endl;
 	}
 	#endif
 
@@ -1542,6 +1679,11 @@ void phaseChains(
 					assert ( UC.first == usea );
 
 					uint8_t const * ub = reinterpret_cast<uint8_t const *>(OVL.isInverse() ? (RC2.getReverseComplementRead(OVL.bread)+bstart) : (RC2.getForwardRead(OVL.bread)+bstart));
+					#if 0
+					uint8_t const * uq = reinterpret_cast<uint8_t const *>(OVL.isInverse() ? (RC2.getReverseComplementRead(OVL.bread)) : (RC2.getForwardRead(OVL.bread)));
+					uint8_t const * uf = reinterpret_cast<uint8_t const *>(RC2.getForwardRead(OVL.bread));
+					#endif
+
 					int64_t const rlb = RC2.getReadLength(OVL.bread);
 
 					#if defined(PHASE_DEBUG)
@@ -1601,6 +1743,13 @@ void phaseChains(
 
 	completeLPV(LPV);
 
+	#if 0
+	for ( uint64_t i = 0; i < LPV.size(); ++i )
+	{
+		err << "**" << LPV[i] << std::endl;
+	}
+	#endif
+
 	// count number of distinct positions in LPV
 	uint64_t zlow = 0;
 	uint64_t lppos = 0;
@@ -1619,9 +1768,8 @@ void phaseChains(
 	uint64_t depth = 0;
 	uint64_t ilppos = lppos;
 
-	int const n0 = 2;
-	int const n1 = 3;
 	libmaus2::util::FiniteSizeHeap<PhaseQueueEntryMulti<n0,n1>,PhaseQueueEntryMultiComparator<n0,n1> > phasemultiFSH(0,PhaseQueueEntryMultiComparator<n0,n1>(&LPV));
+	libmaus2::util::FiniteSizeHeap<PhaseQueueEntryMulti<n0-1,n1-1>,PhaseQueueEntryMultiComparator<n0-1,n1-1> > phasemultiFSH11(0,PhaseQueueEntryMultiComparator<n0-1,n1-1>(&LPV));
 
 	// compute disagreement positions
 	// for this we traverse LPV from back to front
@@ -1747,15 +1895,29 @@ void phaseChains(
 				// interval without A read
 				std::pair<int64_t,int64_t> A(VI[VIa].first+1,VI[VIa].second);
 
-				// if interval is sufficiently large
-				if ( A.second-A.first >= n0 )
-					// check other intervals
-					for ( uint64_t i = 0; i < VI.size(); ++i )
-						if ( static_cast<int64_t>(i) != VIa && VI[i].second-VI[i].first >= n1 )
-						{
-							PhaseQueueEntryMulti<n0,n1> PQ(VI[VIa].first,A,VI[i]);
-							phasemultiFSH.pushBump(PQ);
-						}
+				if ( fulltuples )
+				{
+					// if interval is sufficiently large
+					if ( A.second-A.first >= n0 )
+						// check other intervals
+						for ( uint64_t i = 0; i < VI.size(); ++i )
+							if ( static_cast<int64_t>(i) != VIa && VI[i].second-VI[i].first >= n1 )
+							{
+								PhaseQueueEntryMulti<n0,n1> PQ(VI[VIa].first,A,VI[i]);
+								phasemultiFSH.pushBump(PQ);
+							}
+				}
+				else
+				{
+					if ( A.second-A.first >= n0-1 )
+						// check other intervals
+						for ( uint64_t i = 0; i < VI.size(); ++i )
+							if ( static_cast<int64_t>(i) != VIa && VI[i].second-VI[i].first >= n1-1 )
+							{
+								PhaseQueueEntryMulti<n0-1,n1-1> PQ(VI[VIa].first,A,VI[i]);
+								phasemultiFSH11.pushBump(PQ);
+							}
+				}
 			}
 		}
 
@@ -1764,93 +1926,174 @@ void phaseChains(
 	// we should have seen every consensus position exactly once
 	assert ( ilppos == 0 );
 
-
 	int64_t prevchain = -1;
 	libmaus2::autoarray::AutoArray<uint64_t> DC(numchains,false);
 	std::fill(DC.begin(),DC.end(),0ull);
 
-	struct MinReq
-	{
-		double const crate;
-		double const crate6;
-		double const drate;
-		std::map<uint64_t,uint64_t> M;
-
-		static uint64_t getMod()
-		{
-			return 50;
-		}
-
-		MinReq(double const rcrate, double const rdrate) : crate(rcrate), crate6(::std::pow(crate,6)), drate(rdrate) {}
-
-		uint64_t operator[](uint64_t const i)
-		{
-			uint64_t const mod = getMod();
-			uint64_t j = ((i + mod-1)/mod)*mod;
-
-			if ( M.find(j) == M.end() )
-				M[j] = libmaus2::math::Binom::binomRowUpperGmpFloatLimit(
-					crate6,
-					std::floor(j*drate+0.5),
-					512,
-					0.995
-				);
-
-			return M.find(j)->second;
-		}
-	};
-
-	// double const drate = 0.01;
-	// std::cerr << "drate=" << drate << std::endl;
-	MinReq MR(crate,drate);
+	MinReq<n0,n1> MR(crate,drate);
 	uint64_t const cmin = MR[phasethres];
-	while ( ! phasemultiFSH.empty() )
+
+	if ( fulltuples )
 	{
-		PhaseQueueEntryMulti<n0,n1> const R = phasemultiFSH.top();
-
-		if ( LPV[R.I0[0]].chain != prevchain )
+		// double const drate = 0.01;
+		// std::cerr << "drate=" << drate << std::endl;
+		while ( ! phasemultiFSH.empty() )
 		{
-			int64_t const chainid = LPV[R.I0[0]].chain;
-			prevchain = chainid;
-			err << "[V] chainid=" << chainid << "/" << numchains << std::endl;
-		}
+			PhaseQueueEntryMulti<n0,n1> const R = phasemultiFSH.top();
 
-		uint64_t c = 0;
+			if ( LPV[R.I0[0]].chain != prevchain )
+			{
+				int64_t const chainid = LPV[R.I0[0]].chain;
+				prevchain = chainid;
+				err << "[V] chainid=" << chainid << "/" << numchains << std::endl;
+			}
 
-		#if defined(COMPUTE_VQ)
-		std::vector < PhaseQueueEntryMulti<n0,n1> > VQ;
-		#endif
-
-		while (
-			(! phasemultiFSH.empty()) && phasemultiFSH.top().sameChain(R,LPV)
-		)
-		{
-			PhaseQueueEntryMulti<n0,n1> P = phasemultiFSH.pop();
+			uint64_t c = 0;
 
 			#if defined(COMPUTE_VQ)
-			VQ.push_back(P);
+			std::vector < PhaseQueueEntryMulti<n0,n1> > VQ;
 			#endif
 
-			if ( P.next() )
-				phasemultiFSH.push(P);
-
-			c += 1;
-		}
-
-		if ( c >= cmin )
-		{
-			std::vector < std::vector < libmaus2::math::IntegerInterval<int64_t> > > GCV = R.getConsInterval(chainlengths,chains,Gconsintervals,LPV);
-			uint64_t gcsize = 0;
-			for ( uint64_t i = 0; i < GCV.size(); ++i )
-				for ( uint64_t j = 0; j < GCV[i].size(); ++j )
-					gcsize += GCV[i][j].diameter();
-
-			if ( gcsize >= phasethres && c >= MR[gcsize] )
+			while (
+				(! phasemultiFSH.empty()) && phasemultiFSH.top().sameChain(R,LPV)
+			)
 			{
-				std::vector<int64_t> const C1 = R.getChains1(LPV);
+				PhaseQueueEntryMulti<n0,n1> P = phasemultiFSH.pop();
 
-				for ( uint64_t i = 0; i < C1.size(); ++i )
-					DC[C1[i]]++;
+				#if defined(COMPUTE_VQ)
+				VQ.push_back(P);
+				#endif
+
+				if ( P.next() )
+					phasemultiFSH.push(P);
+
+				c += 1;
+			}
+
+			if ( c >= cmin )
+			{
+				std::vector < std::vector < libmaus2::math::IntegerInterval<int64_t> > > GCV = R.getConsInterval(chainlengths,chains,Gconsintervals,LPV);
+				uint64_t gcsize = 0;
+				for ( uint64_t i = 0; i < GCV.size(); ++i )
+					for ( uint64_t j = 0; j < GCV[i].size(); ++j )
+						gcsize += GCV[i][j].diameter();
+
+				if ( gcsize >= phasethres && c >= MR[gcsize] )
+				{
+					std::vector<int64_t> const C1 = R.getChains1(LPV);
+
+					for ( uint64_t i = 0; i < C1.size(); ++i )
+						DC[C1[i]]++;
+				}
+			}
+		}
+	}
+	else
+	{
+		MinReq<n0-1,n1-1> MR11(crate,drate);
+		uint64_t const cnt11 = 3;
+		uint64_t const div11 = 4;
+		uint64_t const cmin11 = (MR11[phasethres] * cnt11) / div11;
+		libmaus2::autoarray::AutoArray < PhaseQueueEntryMulti<n0-1,n1-1> > AP11;
+		while ( ! phasemultiFSH11.empty() )
+		{
+			uint64_t o = 0;
+
+			PhaseQueueEntryMulti<n0-1,n1-1> const R11 = phasemultiFSH11.top();
+
+			if ( LPV[R11.I0[0]].chain != prevchain )
+			{
+				int64_t const chainid = LPV[R11.I0[0]].chain;
+				prevchain = chainid;
+				err << "[V] chainid=" << chainid << "/" << numchains << std::endl;
+			}
+
+			uint64_t c = 0;
+
+			while (
+				(! phasemultiFSH11.empty()) && phasemultiFSH11.top().sameChain(R11,LPV)
+			)
+			{
+				PhaseQueueEntryMulti<n0-1,n1-1> P = phasemultiFSH11.pop();
+				AP11.push(o,P);
+
+				if ( P.next() )
+					phasemultiFSH11.push(P);
+
+				c += 1;
+			}
+
+			if ( c >= cmin11 )
+			{
+				std::vector < std::vector < libmaus2::math::IntegerInterval<int64_t> > > GCV = R11.getConsInterval(chainlengths,chains,Gconsintervals,LPV);
+				uint64_t gcsize = 0;
+				for ( uint64_t i = 0; i < GCV.size(); ++i )
+					for ( uint64_t j = 0; j < GCV[i].size(); ++j )
+						gcsize += GCV[i][j].diameter();
+
+				uint64_t mr11gc = (MR11[gcsize]*cnt11)/div11;
+				if ( gcsize >= phasethres && c >= mr11gc && o )
+				{
+					for ( uint64_t i = 0; i < o; ++i )
+					{
+						PhaseQueueEntryMulti<n0-1,n1-1> const & Q = AP11[i];
+
+						PhaseQueueEntryMulti<n0,n1> PQ(Q.aseq,Q.VIa,Q.VIb);
+
+						for ( uint64_t j = 0; j < n0-1; ++j )
+							PQ.I0[j] = Q.I0[j];
+						PQ.I0[n0-1] = PQ.I0[n0-2]+1;
+
+						for ( uint64_t j = 0; j < n1-1; ++j )
+							PQ.I1[j] = Q.I1[j];
+						PQ.I1[n1-1] = PQ.I1[n1-2]+1;
+
+						if (
+							(PQ.I0[n0-1] < PQ.VIa.second)
+							&&
+							(PQ.I1[n1-1] < PQ.VIb.second)
+						)
+							phasemultiFSH.pushBump(PQ);
+					}
+					// std::cerr << "V " << c << " mr11gc=" << mr11gc << std::endl;
+
+					while ( ! phasemultiFSH.empty() )
+					{
+						PhaseQueueEntryMulti<n0,n1> const R = phasemultiFSH.top();
+
+						uint64_t c = 0;
+						while (
+							(! phasemultiFSH.empty()) && phasemultiFSH.top().sameChain(R,LPV)
+						)
+						{
+							PhaseQueueEntryMulti<n0,n1> P = phasemultiFSH.pop();
+
+							if ( P.next() && R11.sameChain(P,LPV) )
+								phasemultiFSH.push(P);
+
+							c += 1;
+						}
+
+						if ( c >= cmin )
+						{
+							std::vector < std::vector < libmaus2::math::IntegerInterval<int64_t> > > GCV = R.getConsInterval(chainlengths,chains,Gconsintervals,LPV);
+							uint64_t gcsize = 0;
+							for ( uint64_t i = 0; i < GCV.size(); ++i )
+								for ( uint64_t j = 0; j < GCV[i].size(); ++j )
+									gcsize += GCV[i][j].diameter();
+
+							if ( gcsize >= phasethres && c >= MR[gcsize] )
+							{
+								std::vector<int64_t> const C1 = R.getChains1(LPV);
+
+								for ( uint64_t i = 0; i < C1.size(); ++i )
+									DC[C1[i]]++;
+							}
+						}
+
+					}
+
+				}
 			}
 		}
 	}
@@ -2107,6 +2350,7 @@ std::pair<uint64_t,double> poissonlimit(double const lambda, double const limit)
 	}
 }
 
+template<int n0, int n1>
 int phaser(
 	libmaus2::util::ArgParser const & arg,
 	std::string const & outlasfn,
@@ -2120,6 +2364,17 @@ int phaser(
 	#endif
 )
 {
+	libmaus2::timing::RealTimeClock grtc;
+	grtc.start();
+
+	double volatile gtime = 0;
+	libmaus2::parallel::PosixSpinLock gtimelock;
+
+	#if 0
+	int const n0 = 2;
+	int const n1 = 3;
+	#endif
+
 	arg.printArgs(std::cerr,std::string("[V] "));
 
 	uint64_t const fastaindexmod = 1;
@@ -2151,6 +2406,7 @@ int phaser(
 	uint64_t const dthres = libmaus2::math::Binom::binomRowUpperGmpFloatLimit(crate2,d,512,0.99);
 	bool const checkdisagreement = arg.uniqueArgPresent("c") ? arg.getParsedArg<uint64_t>("c") : getDefaultCheckDisagreement();
 	double const drate = arg.uniqueArgPresent("drate") ? arg.getParsedArg<double>("drate") : getDefaultDRate();
+	bool const fulltuples = arg.uniqueArgPresent("fulltuples");
 
 	std::cerr << "[V] drate=" << drate << std::endl;
 
@@ -2367,8 +2623,9 @@ int phaser(
 	std::cerr << "[V] P.first=" << P.first << std::endl;
 
 	std::cerr << "[V] d'=" << dprime << std::endl;
-	uint64_t const kd = libmaus2::math::Binom::binomialCoefficientInteger(2,P.first) * libmaus2::math::Binom::binomialCoefficientInteger(2,P.first);
-	std::cerr << "[V] (d' 2)(d' 2)=" << kd << std::endl;
+	uint64_t const kv = arg.uniqueArgPresent("kv") ? arg.getUnsignedNumericArg<uint64_t>("kv") : getDefaultKV();
+	uint64_t const kd = libmaus2::math::Binom::binomialCoefficientInteger(n0,P.first) * libmaus2::math::Binom::binomialCoefficientInteger(n1-1,P.first*(kv-1));
+	std::cerr << "[V] (d' " << n0 << ")( ((kv-1) d') " << (n1-1) << ")=" << kd << std::endl;
 
 	uint64_t const dcthres = arg.uniqueArgPresent("dcthres") ? arg.getUnsignedNumericArg<uint64_t>("dcthres") : kd;
 
@@ -2471,6 +2728,8 @@ int phaser(
 	libmaus2::dazzler::align::AlignmentWriterArray AWA(tmpfilebase + "_phase_array",numthreads,tspace);
 	libmaus2::dazzler::align::AlignmentWriterArray AWK(tmpfilebase + "_phase_drop_array",numthreads,tspace);
 
+	gtime += grtc.getElapsedSeconds();
+
 	#if defined(_OPENMP)
 		#if ! defined(PHASE_SERIAL)
 		#pragma omp parallel for num_threads(numthreads) schedule(dynamic,1)
@@ -2478,6 +2737,9 @@ int phaser(
 	#endif
 	for ( int64_t z = minaread; z < toparead; ++z )
 	{
+		libmaus2::timing::RealTimeClock lrtc;
+		lrtc.start();
+
 		try
 		{
 			#if defined(_OPENMP)
@@ -2559,6 +2821,14 @@ int phaser(
 				assert ( RO[i-1].bread <= RO[i].bread );
 			}
 
+
+			#if 0
+			{
+				libmaus2::aio::DebugLineOutputStream DLOS(std::cerr,libmaus2::aio::StreamLock::cerrlock);
+				std::cerr << "[V] " << z << " " << VOVL.size() << std::endl;
+			}
+			#endif
+
 			// std::sort(RO.begin(),RO.begin()+f,OverlapPosComparator());
 
 			#if defined(PHASER_HANDLE_SINGLE)
@@ -2591,6 +2861,11 @@ int phaser(
 				logostr << "[S] handling aread " << RO[0].aread << std::endl;
 
 			// std::pair<unsigned char const *, unsigned char const *> const Q = inqual.getQualityForRead(Vovl[low].aread);
+
+			#if 0
+			for ( unsigned char const * p = Q.first; p != Q.second; ++p )
+				std::cerr << "block " << p-Q.first << " qual " << static_cast<int>(*p) << std::endl;
+			#endif
 
 			std::vector < ReadFragment > fragments;
 			for ( uint64_t i = 0; i < Vpat.size(); ++i )
@@ -2632,7 +2907,7 @@ int phaser(
 
 						std::ostream & errchannel = (numthreads > 1) ? logostr : std::cerr;
 
-						phaseChains(
+						phaseChains<n0,n1>(
 							errchannel,
 							fragments,
 							CS.chainlengths,
@@ -2652,7 +2927,8 @@ int phaser(
 							drate,
 							phasethres,
 							checkdisagreement,
-							dcthres
+							dcthres,
+							fulltuples
 							#if defined(PHASE_DEBUG)
 								,
 								*(ABAC[tid]),
@@ -2736,7 +3012,13 @@ int phaser(
 		{
 			std::cerr << ex.what() << std::endl;
 		}
+
+		gtimelock.lock();
+		gtime += lrtc.getElapsedSeconds();
+		gtimelock.unlock();
 	}
+
+	grtc.start();
 
 	AWA.merge(
 		outlasfn,
@@ -2750,6 +3032,10 @@ int phaser(
 		outdroplasfn,
 		tmpfilebase + "_phase_merge_drop_tmp"
 	);
+
+	gtime += grtc.getElapsedSeconds();
+
+	std::cerr << "[V] accumulated time " << gtime << std::endl;
 
 	return EXIT_SUCCESS;
 }
@@ -2772,7 +3058,7 @@ static std::string helpMessage(libmaus2::util::ArgParser const & arg)
 	optionMap . push_back ( std::pair < std::string, std::string >("E", formatRHS("error profile file name",std::string("in.las.eprof"))));
 	optionMap . push_back ( std::pair < std::string, std::string >("T", formatRHS("temporary file prefix",libmaus2::util::ArgInfo::getDefaultTmpFileName(arg.progname))));
 	optionMap . push_back ( std::pair < std::string, std::string >("drate", formatRHS("difference rate",getDefaultDRate())));
-	optionMap . push_back ( std::pair < std::string, std::string >("dcthres", formatRHS("splitting tuple count threshold","computed using d parameter")));
+	optionMap . push_back ( std::pair < std::string, std::string >("kv", formatRHS("number of variants",getDefaultKV())));
 
 	uint64_t maxlhs = 0;
 	for ( std::vector < std::pair < std::string, std::string > >::const_iterator ita = optionMap.begin(); ita != optionMap.end(); ++ita )
@@ -2808,13 +3094,47 @@ static std::string helpMessage(libmaus2::util::ArgParser const & arg)
 	return messtr.str();
 }
 
-
+static int getDefaultPhaseType()
+{
+	return 5;
+}
 
 int main(int argc, char * argv[])
 {
 	try
 	{
+		#if 0
+		{
+			uint64_t const q = libmaus2::math::Binom::binomialCoefficientInteger(5,8);
+			libmaus2::util::Enumerator<5> E(8);
+
+			uint64_t c = 0;
+			for ( ; E.valid(); E.next() )
+			{
+				std::cerr << E.toString() << std::endl;
+				++c;
+			}
+
+			std::cerr << "c=" << c << " q=" << q << std::endl;
+		}
+		#endif
+
 		libmaus2::util::ArgParser arg(argc,argv);
+
+		#if 0
+		uint64_t n = 22308;
+		double const pp = 0.37;
+
+		std::vector < libmaus2::math::GmpFloat > GV = libmaus2::math::Binom::binomVector(pp,n,512);
+		for ( uint64_t i = 0; i < GV.size(); ++i )
+		{
+			double const v = GV[i];
+			if ( v >= 1e-8 )
+				std::cerr << "i=" << i << "\t" << v << std::endl;
+		}
+
+		return 0;
+		#endif
 
 		if ( arg.uniqueArgPresent("v") || arg.uniqueArgPresent("version") )
 		{
@@ -2841,7 +3161,25 @@ int main(int argc, char * argv[])
 
 			int r = EXIT_FAILURE;
 
-			r = phaser(arg,arg[0] /* outlas */,arg[1] /* cons */,arg[2] /* in las */, arg[3] /* db1 */, arg[4] /* db2 */, arg[5] /* bam */);
+			uint64_t const phasetype = arg.uniqueArgPresent("phasetype") ? arg.getParsedArg<uint64_t>("phasetype") : getDefaultPhaseType();
+
+			switch ( phasetype )
+			{
+				case 5:
+					r = phaser<2,3>(arg,arg[0] /* outlas */,arg[1] /* cons */,arg[2] /* in las */, arg[3] /* db1 */, arg[4] /* db2 */, arg[5] /* bam */);
+					break;
+				case 7:
+					r = phaser<3,4>(arg,arg[0] /* outlas */,arg[1] /* cons */,arg[2] /* in las */, arg[3] /* db1 */, arg[4] /* db2 */, arg[5] /* bam */);
+					break;
+				default:
+				{
+					libmaus2::exception::LibMausException lme;
+					lme.getStream() << "[E] unknown phasetype " << phasetype << std::endl;
+					lme.finish();
+					throw lme;
+					break;
+				}
+			}
 
 			std::cerr << "[V] processing time " << rtc.formatTime(rtc.getElapsedSeconds()) << std::endl;
 
@@ -2866,10 +3204,47 @@ int main(int argc, char * argv[])
 
 			int r = EXIT_FAILURE;
 
+			uint64_t const phasetype = arg.uniqueArgPresent("phasetype") ? arg.getParsedArg<uint64_t>("phasetype") : getDefaultPhaseType();
+
 			if ( arg.size() == 4 )
-				r = phaser(arg,arg[0],arg[1],arg[2],arg[3],arg[3]);
+			{
+				switch ( phasetype )
+				{
+					case 5:
+						r = phaser<2,3>(arg,arg[0],arg[1],arg[2],arg[3],arg[3]);
+						break;
+					case 7:
+						r = phaser<3,4>(arg,arg[0],arg[1],arg[2],arg[3],arg[3]);
+						break;
+					default:
+					{
+						libmaus2::exception::LibMausException lme;
+						lme.getStream() << "[E] unknown phasetype " << phasetype << std::endl;
+						lme.finish();
+						throw lme;
+						break;
+					}
+				}
+			}
 			else
-				r = phaser(arg,arg[0],arg[1],arg[2],arg[3],arg[4]);
+			{
+				switch ( phasetype )
+				{
+					case 5:
+						r = phaser<2,3>(arg,arg[0],arg[1],arg[2],arg[3],arg[4]);
+						break;
+					case 7:
+						r = phaser<3,4>(arg,arg[0],arg[1],arg[2],arg[3],arg[4]);
+						break;
+					default:
+					{
+						libmaus2::exception::LibMausException lme;
+						lme.getStream() << "[E] unknown phasetype " << phasetype << std::endl;
+						lme.finish();
+						throw lme;
+						break;
+					}				}
+			}
 
 			std::cerr << "[V] processing time " << rtc.formatTime(rtc.getElapsedSeconds()) << std::endl;
 

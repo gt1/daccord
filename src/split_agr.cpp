@@ -889,7 +889,7 @@ void fillLPV(
 }
 
 
-void phaseChains(
+double phaseChains(
 	std::ostream & err,
 	std::vector < ReadFragment > const & fragments,
 	std::vector < uint64_t > const & chainlengths,
@@ -908,6 +908,7 @@ void phaseChains(
 	// trace point space for overlaps
 	int64_t const tspace,
 	libmaus2::dazzler::align::AlignmentWriter & AW,
+	libmaus2::dazzler::align::AlignmentWriter & RAW,
 	uint64_t const dthres,
 	libmaus2::dazzler::db::Track const & etrack,
 	double const crate
@@ -925,7 +926,7 @@ void phaseChains(
 	uint64_t const phaselenthres = 250; // XXX may this a parameter
 
 	if ( ita == ite )
-		return;
+		return 0;
 
 	std::vector<int64_t> seqtochain(ite-ita,-1);
 	std::vector<int64_t> chainbaselength(numchains,0);
@@ -2034,6 +2035,7 @@ void phaseChains(
 		}
 		else
 		{
+			RAW.put(ita[i]);
 			dropset[ita[i].bread]++;
 
 			#if defined(PHASE_DEBUG)
@@ -2072,6 +2074,8 @@ void phaseChains(
 	#endif
 
 	err << "[V] read id " << ita[0].aread << " time " << rtc << std::endl;
+
+	return rtc.getElapsedSeconds();
 }
 
 struct OverlapPosComparator
@@ -2234,6 +2238,12 @@ int phaser(
 	#endif
 )
 {
+	libmaus2::timing::RealTimeClock grtc;
+	grtc.start();
+
+	double volatile gtime = 0;
+	libmaus2::parallel::PosixSpinLock gtimelock;
+
 	arg.printArgs(std::cerr,std::string("[V] "));
 
 	uint64_t const fastaindexmod = 1;
@@ -2646,6 +2656,9 @@ int phaser(
 	#endif
 
 	libmaus2::dazzler::align::AlignmentWriterArray AWA(tmpfilebase + "_phase_array",numthreads,tspace);
+	libmaus2::dazzler::align::AlignmentWriterArray RAWA(tmpfilebase + "_phase_array_r",numthreads,tspace);
+
+	gtime += grtc.getElapsedSeconds();
 
 	#if defined(_OPENMP)
 		#if ! defined(PHASE_SERIAL)
@@ -2654,6 +2667,9 @@ int phaser(
 	#endif
 	for ( int64_t z = minaread; z < toparead; ++z )
 	{
+		libmaus2::timing::RealTimeClock lrtc;
+		lrtc.start();
+
 		#if defined(_OPENMP)
 		uint64_t const tid = omp_get_thread_num();
 		#else
@@ -2969,7 +2985,7 @@ int phaser(
 					DecodedReadContainer RDC(readDataFreeList,readDecoderFreeList);
 					DecodedReadContainer RDC2(readDataFreeList,readDecoderFreeList2);
 					libmaus2::lcs::Aligner & al = *(ANP[tid]);
-					phaseChains(
+					/* double const ltime = */ phaseChains(
 						#if defined(PHASE_SERIAL)
 						std::cerr,
 						#else
@@ -2987,6 +3003,7 @@ int phaser(
 						al,
 						tspace,
 						AWA[tid],
+						RAWA[tid],
 						dthres,
 						etrack,
 						crate
@@ -2997,6 +3014,7 @@ int phaser(
 							DB2
 						#endif
 					);
+
 				}
 			}
 			catch(std::exception const & ex)
@@ -3068,12 +3086,26 @@ int phaser(
 				logQprintnext += VLE.size();
 			}
 		}
+
+		gtimelock.lock();
+		gtime += lrtc.getElapsedSeconds();
+		gtimelock.unlock();
 	}
+
+	grtc.start();
 
 	AWA.merge(
 		outlasfn,
 		tmpfilebase + "_phase_merge_tmp"
 	);
+	RAWA.merge(
+		libmaus2::util::OutputFileNameTools::clipOff(outlasfn,".las") + "_drop.las",
+		tmpfilebase + "_phase_merge_tmp_r"
+	);
+
+	gtime += grtc.getElapsedSeconds();
+
+	std::cerr << "[V] accumulated time " << gtime << std::endl;
 
 	return EXIT_SUCCESS;
 }
