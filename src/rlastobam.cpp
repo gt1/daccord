@@ -104,13 +104,13 @@ int main(int argc, char * argv[])
 	{
 		libmaus2::util::ArgParser const arg(argc,argv);
 		libmaus2::util::ArgInfo arginfo(argc,argv);
-		
+
 		if ( arg.size() < 4 )
 		{
 			std::cerr << "usage: " << argv[0] << " [<-tnumthreads>] <a.db> <b.db> <ref.fasta> <in.las> >out.bam";
 			return EXIT_FAILURE;
 		}
-		
+
 		std::string const dba = arg[0];
 		std::string const dbb = arg[1];
 		std::string const ref = arg[2];

@@ -98,7 +98,15 @@ struct ReadAccessor
 			FARE.skipPattern();
 		libmaus2::fastx::FastAReader::pattern_type P;
 		bool const ok = FARE.getNextPatternUnlocked(P);
-		assert ( ok );
+
+		if ( ! ok )
+		{
+			libmaus2::exception::LibMausException lme;
+			lme.getStream() << "ReadAccessor::operator[]: failed to get read number " << i << std::endl;
+			lme.finish();
+			throw lme;
+		}
+
 		patternToUpper(P);
 		return P;
 	}
@@ -306,7 +314,7 @@ std::ostream & operator<<(std::ostream & out, DepthLine const & D)
 	return out << "DepthLine(" << D.from << "," << D.to << "," << D.d << ")";
 }
 
-void handle(libmaus2::dazzler::align::Overlap * A, uint64_t const f, libmaus2::dazzler::align::AlignmentWriter & AW, int64_t const dthres)
+void handle(libmaus2::dazzler::align::Overlap * A, uint64_t const f, libmaus2::dazzler::align::AlignmentWriter & AW, int64_t const /* dthres */)
 {
 	std::sort(A,A+f,libmaus2::dazzler::align::OverlapFullComparator());
 	for ( uint64_t i = 0; i < f; ++i )

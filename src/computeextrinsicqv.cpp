@@ -17,10 +17,25 @@
 */
 #include <libmaus2/util/ArgParser.hpp>
 #include <libmaus2/fastx/FastaPeeker.hpp>
+#include <libmaus2/fastx/StreamFastAReader.hpp>
 #include <libmaus2/lcs/NP.hpp>
+#include <libmaus2/lcs/NNPCorL.hpp>
 #include <libmaus2/lcs/AlignmentPrint.hpp>
 #include <libmaus2/dazzler/db/DatabaseFile.hpp>
+#include <libmaus2/parallel/NumCpus.hpp>
+#include <libmaus2/sorting/SortingBufferedOutputFile.hpp>
 #include <config.h>
+
+std::string getTmpFileBase(libmaus2::util::ArgParser const & arg)
+{
+	std::string const tmpfilebase = arg.uniqueArgPresent("T") ? arg["T"] : libmaus2::util::ArgInfo::getDefaultTmpFileName(arg.progname);
+	return tmpfilebase;
+}
+
+static uint64_t getDefaultNumThreads()
+{
+	return libmaus2::parallel::NumCpus::getNumLogicalProcessors();
+}
 
 int64_t getId(libmaus2::fastx::FastAReader::pattern_type const & pb)
 {
@@ -97,41 +112,277 @@ static std::string helpMessage(libmaus2::util::ArgParser const & /* arg */)
 	return messtr.str();
 }
 
+struct IndexEntry
+{
+	uint64_t offset;
+	uint64_t count;
+
+	IndexEntry()
+	{}
+
+	IndexEntry(uint64_t const roffset, uint64_t const rcount) : offset(roffset), count(rcount) {}
+	IndexEntry(std::istream & in) { deserialise(in); }
+
+	std::istream & deserialise(std::istream & in)
+	{
+		offset = libmaus2::util::NumberSerialisation::deserialiseNumber(in);
+		count = libmaus2::util::NumberSerialisation::deserialiseNumber(in);
+		return in;
+	}
+
+	std::ostream & serialise(std::ostream & out) const
+	{
+		libmaus2::util::NumberSerialisation::serialiseNumber(out,offset);
+		libmaus2::util::NumberSerialisation::serialiseNumber(out,count);
+		return out;
+	}
+};
+
+static std::vector<IndexEntry> indexConsFile(std::string const & fn, uint64_t const nr)
+{
+	std::vector<IndexEntry> V(nr);
+	libmaus2::fastx::FastAReader FA(fn);
+	libmaus2::fastx::FastAReader::pattern_type pattern;
+
+	int64_t prevread = std::numeric_limits<int64_t>::min();
+	uint64_t prevcount = 0;
+	uint64_t prevo = 0;
+	uint64_t next = 0;
+
+	while ( FA.foundnextmarker )
+	{
+		uint64_t const o = FA.getC()-1;
+
+		bool const ok = FA.getNextPatternUnlocked(pattern);
+		assert ( ok );
+
+		int64_t const id = getId(pattern);
+		assert ( id >= 0 );
+
+		if ( id != prevread )
+		{
+			if ( prevread >= 0 )
+			{
+				while ( static_cast<int64_t>(next) < prevread )
+				{
+					V[next] = IndexEntry(0,0);
+					++next;
+				}
+				// std::cerr << "o=" << prevo << " id=" << prevread << " count=" << prevcount << std::endl;
+				V[next] = IndexEntry(prevo,prevcount);
+
+				++next;
+			}
+
+			prevo = o;
+			prevread = id;
+			prevcount = 0;
+		}
+
+		++prevcount;
+	}
+
+	if ( prevread >= 0 )
+	{
+		while ( static_cast<int64_t>(next) < prevread )
+		{
+			V[next] = IndexEntry(0,0);
+			++next;
+		}
+		// std::cerr << "o=" << prevo << " id=" << prevread << " count=" << prevcount << std::endl;
+		V[next] = IndexEntry(prevo,prevcount);
+		++next;
+	}
+
+	while ( next < nr )
+	{
+		V[next] = IndexEntry(0,0);
+		++next;
+	}
+
+	return V;
+}
+
+struct StringId
+{
+	uint64_t id;
+	uint64_t len;
+	libmaus2::autoarray::AutoArray<uint8_t> A;
+
+	StringId()
+	{
+
+	}
+
+	template<typename iterator>
+	StringId(uint64_t const rid, uint64_t const rlen, iterator rA)
+	: id(rid), len(rlen), A(len,false)
+	{
+		std::copy(rA,rA+rlen,A.begin());
+	}
+
+	StringId(std::istream & in)
+	{
+		deserialise(in);
+	}
+
+	std::istream & deserialise(std::istream & in)
+	{
+		id = libmaus2::util::NumberSerialisation::deserialiseNumber(in);
+		len = libmaus2::util::NumberSerialisation::deserialiseNumber(in);
+
+		A.resize(len);
+		in.read(reinterpret_cast<char *>(A.begin()),len);
+		assert ( in.gcount() == static_cast<int64_t>(len) );
+
+		return in;
+	}
+
+	std::ostream & serialise(std::ostream & out) const
+	{
+		libmaus2::util::NumberSerialisation::serialiseNumber(out,id);
+		libmaus2::util::NumberSerialisation::serialiseNumber(out,len);
+		out.write(reinterpret_cast<char const *>(A.begin()),len);
+		return out;
+	}
+
+	bool operator<(StringId const & O) const
+	{
+		return id < O.id;
+	}
+};
 
 int computequality(libmaus2::util::ArgParser const & arg)
 {
-	// libmaus2::fastx::FastaPeeker FA(arg[0]);
-	libmaus2::fastx::FastaPeeker FC(arg[1]);
-	std::string const dbname = arg[2];
-	libmaus2::dazzler::db::DatabaseFile DB(dbname);
+	std::string const db0name = arg[1];
+
+	std::cerr << "[V] loading data for " << db0name << " to memory...";
+	libmaus2::dazzler::db::DatabaseFile::DBArrayFileSet::unique_ptr_type Pdb0data(
+		libmaus2::dazzler::db::DatabaseFile::copyToArrays(db0name)
+	);
+	libmaus2::dazzler::db::DatabaseFile::DBArrayFileSet const * db0data = Pdb0data.get();
+	std::cerr << "done." << std::endl;
+
+	libmaus2::dazzler::db::DatabaseFile::unique_ptr_type PDB0(
+		new libmaus2::dazzler::db::DatabaseFile(db0data->getDBURL())
+	);
+	libmaus2::dazzler::db::DatabaseFile & DB = *PDB0;
 	DB.computeTrimVector();
-	uint64_t const part = 3 < arg.size() ? arg.getParsedRestArg<uint64_t>(3) : 0;
+	std::vector<uint64_t> RL;
+	DB.getAllReadLengths(RL);
+
+	std::vector<IndexEntry> const Vindex = indexConsFile(arg[0],DB.size());
+
+	if ( arg.uniqueArgPresent("indexonly") )
+		return EXIT_SUCCESS;
+
+	uint64_t const numthreads = arg.uniqueArgPresent("t") ? arg.getUnsignedNumericArg<uint64_t>("t") : getDefaultNumThreads();
+	std::string const tmpfilebase = getTmpFileBase(arg);
+
+	std::vector < std::string > Vtmp(numthreads);
+	libmaus2::autoarray::AutoArray < libmaus2::aio::OutputStreamInstance::unique_ptr_type > Aout(numthreads);
+	for ( uint64_t i = 0; i < numthreads; ++i )
+	{
+		std::ostringstream fnostr;
+		fnostr << tmpfilebase << "_" << i << "_datatmp";
+		std::string const fn = fnostr.str();
+		Vtmp[i] = fn;
+		libmaus2::util::TempFileRemovalContainer::addTempFile(fn);
+
+		libmaus2::aio::OutputStreamInstance::unique_ptr_type tptr(
+			new libmaus2::aio::OutputStreamInstance(fn)
+		);
+
+		Aout[i] = UNIQUE_PTR_MOVE(tptr);
+	}
 
 	int64_t const tspace = arg.uniqueArgPresent("tspace") ? arg.getUnsignedNumericArg<uint64_t>("tspace") : getDefaultTSpace();
 
-	std::string const annofn = DB.getBlockTrackAnnoFileName("exqual",part);
-	std::string const datafn = DB.getBlockTrackDataFileName("exqual",part);
-
-	libmaus2::aio::OutputStreamInstance dataOSI(datafn);
-
-	libmaus2::fastx::FastAReader::pattern_type pb;
-
-	libmaus2::lcs::NP np;
-
 	// int64_t first = -1;
-	std::vector<uint64_t> annosize(DB.size(),0ull);
 
-	for ( uint64_t aid = 0; aid < DB.size(); ++aid )
+	int64_t Icnt = 0;
+	int64_t Idiv = 1;
+	if ( arg.uniqueArgPresent("J") )
 	{
-		uint64_t const l = DB.getRead(aid).rlen;
+
+		std::string const Js = arg["J"];
+		std::istringstream istr(Js);
+		istr >> Icnt;
+
+		if ( ! istr )
+		{
+			libmaus2::exception::LibMausException lme;
+			lme.getStream() << "[E] unable to parse " << Js << std::endl;
+			lme.finish();
+			throw lme;
+		}
+
+		int const c = istr.get();
+
+		if ( ! istr || c == std::istream::traits_type::eof() || c != ',' )
+		{
+			libmaus2::exception::LibMausException lme;
+			lme.getStream() << "[E] unable to parse " << Js << std::endl;
+			lme.finish();
+			throw lme;
+		}
+
+		istr >> Idiv;
+
+		if ( ! istr || istr.peek() != std::istream::traits_type::eof() )
+		{
+			libmaus2::exception::LibMausException lme;
+			lme.getStream() << "[E] unable to parse " << Js << std::endl;
+			lme.finish();
+			throw lme;
+		}
+
+		if ( !Idiv )
+		{
+			libmaus2::exception::LibMausException lme;
+			lme.getStream() << "[E] denominator of J argument cannot be zero" << std::endl;
+			lme.finish();
+			throw lme;
+		}
+	}
+
+	uint64_t const n = DB.size();
+	uint64_t const readsperpack = (n + Idiv - 1) / Idiv;
+
+	uint64_t const alow = std::min(Icnt * readsperpack,n);
+	uint64_t const ahigh = std::min(alow + readsperpack,n);
+
+	libmaus2::autoarray::AutoArray<uint64_t> annosize(ahigh-alow);
+	std::fill(annosize.begin(),annosize.end(),0ull);
+
+	std::cerr << "[V] processing [" << alow << "," << ahigh << ")" << std::endl;
+
+	#if defined(_OPENMP)
+	#pragma omp parallel for schedule(dynamic,1) num_threads(numthreads)
+	#endif
+	for ( uint64_t aid = alow; aid < ahigh; ++aid )
+	{
+		uint64_t const l = RL[aid];
 		// number of trace point intervals
 		uint64_t const nt = (l + tspace - 1)/tspace;
-		annosize[aid] = nt;
+		annosize[aid - alow] = nt;
 		std::vector<uint8_t> V(nt,std::numeric_limits<uint8_t>::max());
 
-		while ( FC.peekNext(pb) && getId(pb) == static_cast<int64_t>(aid) )
+		libmaus2::fastx::FastAReader::pattern_type pb;
+		libmaus2::lcs::NNPCorL np;
+
+		libmaus2::aio::InputStreamInstance ISI(arg[0]);
+		ISI.seekg(Vindex[aid].offset);
+		libmaus2::fastx::StreamFastAReaderWrapper SFC(ISI);
+
+		std::string const afull = DB[aid];
+
+		for ( uint64_t z = 0; z < Vindex[aid].count; ++z )
 		{
-			FC.getNext(pb);
+			bool const ok = SFC.getNextPatternUnlocked(pb);
+			assert ( ok );
+			assert ( getId(pb) == static_cast<int64_t>(aid) );
+			// FC.getNext(pb);
 
 			assert ( pb.sid.find("A=[") != std::string::npos );
 			std::string sid = pb.sid;
@@ -146,9 +397,11 @@ int computequality(libmaus2::util::ArgParser const & arg)
 			assert ( istr.peek() == ',' );
 			istr.get();
 			istr >> to;
+			to += 1;
+			to = std::min(to,static_cast<int64_t>(RL[aid]));
 			assert ( istr.peek() == std::istream::traits_type::eof() );
 
-			std::string const asub = DB[aid].substr(from,to-from+1);
+			std::string const asub = afull.substr(from,to-from);
 			std::string const bsub = pb.spattern;
 
 			np.np(asub.begin(),asub.end(),bsub.begin(),bsub.end());
@@ -181,7 +434,13 @@ int computequality(libmaus2::util::ArgParser const & arg)
 				assert ( from % tspace == 0 );
 
 				std::pair<uint64_t,uint64_t> const P = libmaus2::lcs::AlignmentTraceContainer::advanceA(np.ta,np.te,tspace);
-				assert ( static_cast<int64_t>(P.first) == tspace );
+
+				bool const ok = static_cast<int64_t>(P.first) == tspace;
+				if ( ! ok )
+				{
+					std::cerr << "Failure for " << aid << " tspace=" << tspace << " P.first=" << P.first << " from=" << from << " to=" << to << " RL=" << RL[aid] << std::endl;
+				}
+				assert ( ok );
 
 				libmaus2::lcs::AlignmentStatistics AS = libmaus2::lcs::AlignmentTraceContainer::getAlignmentStatistics(np.ta,np.ta+P.second);
 
@@ -193,19 +452,87 @@ int computequality(libmaus2::util::ArgParser const & arg)
 				from += tspace;
 				np.ta += P.second;
 			}
+
+			if ( (from % tspace == 0) && (to > from) && (to == static_cast<int64_t>(l)) )
+			{
+				uint64_t const d = to-from;
+				assert ( static_cast<int64_t>(d) < tspace );
+
+				std::pair<uint64_t,uint64_t> const P = libmaus2::lcs::AlignmentTraceContainer::advanceA(np.ta,np.te,d);
+				assert ( static_cast<int64_t>(P.first) == static_cast<int64_t>(d) );
+
+				libmaus2::lcs::AlignmentStatistics AS = libmaus2::lcs::AlignmentTraceContainer::getAlignmentStatistics(np.ta,np.ta+P.second);
+
+				uint64_t const e = std::floor(AS.getErrorRate() * std::numeric_limits<uint8_t>::max() + 0.5);
+				assert ( e <= std::numeric_limits<uint8_t>::max() );
+
+				V [ from / tspace ] = std::min(V[from/tspace],static_cast<uint8_t>(e));
+
+				from += d;
+				np.ta += P.second;
+			}
 		}
 
+		#if 0
 		for ( uint64_t i = 0; i < V.size(); ++i )
 		{
 			// std::cerr << aid << " " << i << " " << (double)V[i]/255.0 << std::endl;
 			dataOSI.put(V[i]);
 		}
+		#endif
 
-		if ( aid % 1024 == 0 )
-			std::cerr << "[V] " << aid << std::endl;
+		StringId SI(aid,V.size(),V.begin());
+
+		#if defined(_OPENMP)
+		uint64_t const tid = omp_get_thread_num();
+		#else
+		uint64_t const tid = 0;
+		#endif
+
+		SI.serialise(*(Aout[tid]));
+
+		if ( (aid-alow) % 1024 == 0 )
+		{
+			libmaus2::parallel::ScopePosixSpinLock slock(libmaus2::aio::StreamLock::cerrlock);
+			std::cerr << "[V] " << (aid-alow) << std::endl;
+		}
 	}
 
-	std::cerr << "[V] " << DB.size() << std::endl;
+	for ( uint64_t i = 0; i < numthreads; ++i )
+	{
+		Aout[i]->flush();
+		Aout[i].reset();
+	}
+
+	std::cerr << "[V] " << (ahigh-alow) << std::endl;
+
+	PDB0.reset();
+	libmaus2::dazzler::db::DatabaseFile ondiskDB(db0name);
+
+	std::string const annofn = ondiskDB.getBlockTrackAnnoFileName("exqual",(Idiv > 1) ? (Icnt+1) : 0);
+	std::string const datafn = ondiskDB.getBlockTrackDataFileName("exqual",(Idiv > 1) ? (Icnt+1) : 0);
+
+	std::ostringstream fnostr;
+	fnostr << tmpfilebase << "_mergetmp";
+	std::string const mergetmpfn = fnostr.str();
+	libmaus2::util::TempFileRemovalContainer::addTempFile(mergetmpfn);
+	libmaus2::sorting::SerialisingSortingBufferedOutputFile<StringId>::reduce(Vtmp,mergetmpfn);
+
+	for ( uint64_t i = 0; i < numthreads; ++i )
+		libmaus2::aio::FileRemoval::removeFile(Vtmp[i]);
+
+	libmaus2::aio::InputStreamInstance dataISI(mergetmpfn);
+	libmaus2::aio::OutputStreamInstance dataOSI(datafn);
+
+	while ( dataISI && (dataISI.peek() != std::istream::traits_type::eof()) )
+	{
+		StringId SI(dataISI);
+		for ( uint64_t i = 0; i < SI.len; ++i )
+			dataOSI.put(SI.A[i]);
+	}
+
+	uint64_t const p = dataOSI.tellp();
+	assert ( p == std::accumulate(annosize.begin(),annosize.end(),0ull) );
 
 	dataOSI.flush();
 
@@ -239,12 +566,12 @@ int main(int argc, char * argv[])
 			std::cerr << PACKAGE_NAME << " is distributed under version 3 of the GPL." << std::endl;
 			return EXIT_SUCCESS;
 		}
-		else if ( arg.uniqueArgPresent("h") || arg.uniqueArgPresent("help") || arg.size() < 3 )
+		else if ( arg.uniqueArgPresent("h") || arg.uniqueArgPresent("help") || arg.size() < 2 )
 		{
 			std::cerr << "This is " << PACKAGE_NAME << " version " << PACKAGE_VERSION << "." << std::endl;
 			std::cerr << PACKAGE_NAME << " is distributed under version 3 of the GPL." << std::endl;
 			std::cerr << "\n";
-			std::cerr << "usage: " << arg.progname << " [options] reads.fasta reads_cons.fasta reads.db [blockid]\n";
+			std::cerr << "usage: " << arg.progname << " [options] reads_cons.fasta reads.db\n";
 			std::cerr << "\n";
 			std::cerr << "The following options can be used (no space between option name and parameter allowed):\n\n";
 			std::cerr << helpMessage(arg);

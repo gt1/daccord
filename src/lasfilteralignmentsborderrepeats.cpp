@@ -15,7 +15,7 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
-
+#include <RepeatIdComparator.hpp>
 #include <config.h>
 
 #include <libmaus2/dazzler/align/OverlapProperCheck.hpp>
@@ -29,53 +29,10 @@
 #include <libmaus2/util/OutputFileNameTools.hpp>
 #include <libmaus2/lcs/AlignmentPrint.hpp>
 #include <libmaus2/parallel/NumCpus.hpp>
-
-struct Repeat
-{
-	uint64_t id;
-	uint64_t abpos;
-	uint64_t aepos;
-
-	Repeat(uint64_t const rid = 0) : id(rid)
-	{}
-
-	Repeat(std::istream & in)
-	:
-		id(libmaus2::util::NumberSerialisation::deserialiseNumber(in)),
-		abpos(libmaus2::util::NumberSerialisation::deserialiseNumber(in)),
-		aepos(libmaus2::util::NumberSerialisation::deserialiseNumber(in))
-	{}
-
-	static libmaus2::autoarray::AutoArray<Repeat> loadArray(std::istream & in)
-	{
-		uint64_t const recsize = 3*sizeof(uint64_t);
-		in.clear();
-		in.seekg(0,std::ios::end);
-		uint64_t const fs = in.tellg();
-		in.clear();
-		in.seekg(0,std::ios::beg);
-		assert ( fs % recsize == 0 );
-		uint64_t const n = fs / recsize;
-		libmaus2::autoarray::AutoArray<Repeat> A(n,false);
-		for ( uint64_t i = 0; i < n; ++i )
-			A[i] = Repeat(in);
-		return A;
-	}
-
-	static libmaus2::autoarray::AutoArray<Repeat> loadArray(std::string const & fn)
-	{
-		libmaus2::aio::InputStreamInstance ISI(fn);
-		return loadArray(ISI);
-	}
-};
-
-struct RepeatIdComparator
-{
-	bool operator()(Repeat const & A, Repeat const & B) const
-	{
-		return A.id < B.id;
-	}
-};
+#include <libmaus2/sorting/SortingBufferedOutputFile.hpp>
+#include <libmaus2/aio/SerialisedPeeker.hpp>
+#include <libmaus2/dazzler/align/OverlapInfoIndexer.hpp>
+#include <libmaus2/dazzler/align/LasIntervals.hpp>
 
 struct IsProper
 {
@@ -98,6 +55,9 @@ struct IsProper
 		int64_t const rtspace
 	) : DB(rDB), tspace(rtspace), nnp(30,125), OPC(rOPC) {}
 
+	/*
+	 * check whether there is a proper overlap by the B reads given in overlaps A and B
+	 */
 	bool isProper(
 		libmaus2::dazzler::align::Overlap const & A,
 		libmaus2::dazzler::align::Overlap const & B,
@@ -108,7 +68,7 @@ struct IsProper
 		uint64_t oa = A.getTracePoints(tspace,A.bread,TPVA,0);
 		uint64_t ob = B.getTracePoints(tspace,B.bread,TPVB,0);
 
-		// look for common trace point aligned at tspace
+		// sync up on A
 		uint64_t ia = 0, ib = 0;
 		while (
 			ia < oa && ib < ob && (TPVA[ia].apos != TPVB[ib].apos || TPVA[ia].apos % tspace != 0)
@@ -120,6 +80,7 @@ struct IsProper
 				++ib;
 		}
 
+		// no sync point, return false
 		if ( ia == oa || ib == ob )
 			return false;
 
@@ -226,6 +187,7 @@ void handle(
 	int64_t const prevaread,
 	int64_t const lthres,
 	libmaus2::dazzler::align::AlignmentWriter & AW,
+	std::ostream & symkill,
 	int64_t const tspace,
 	double const termval
 )
@@ -334,6 +296,7 @@ void handle(
 						uint64_t const jright = jsize - VOVL[j].path.bepos;
 						// remaining on the right of both
 						uint64_t const eright = std::min(iright,jright);
+
 						// remaining on the left of i
 						uint64_t const ileft = VOVL[i].path.bbpos;
 						// remaining on the left of j
@@ -361,7 +324,7 @@ void handle(
 								VOVL[j].isInverse()
 							);
 							// get combined error
-							double const errleft = std::min(errleft_i,errleft_j);
+							double const errleft = std::max(errleft_i,errleft_j);
 
 							// if both are below termval, then reads should align in this region
 							if ( errleft <= termval)
@@ -390,7 +353,7 @@ void handle(
 								VOVL[j].isInverse()
 							);
 							// get combined error
-							double const errright = std::min(errright_i,errright_j);
+							double const errright = std::max(errright_i,errright_j);
 
 							// if both are below termval, then reads should align in this region
 							if ( errright <= termval )
@@ -462,154 +425,27 @@ void handle(
 			AW.put(VOVL[i]);
 			++written;
 		}
+		else
+		{
+			libmaus2::dazzler::align::OverlapInfo info = VOVL[i].getHeader().getInfo().swapped();
+
+			if ( VOVL[i].isInverse() )
+			{
+				uint64_t const alen = (*(OPC.RL))[info.aread >> 1];
+				uint64_t const blen = (*(OPC.RL))[info.bread >> 1];
+				info = info.inverse(alen,blen);
+			}
+
+			assert ( (info.aread & 1) == 0 );
+
+			info.serialise(symkill);
+		}
 
 	err << "[V] processing " << prevaread << " complete, kept " << written << " / " << VOVL.size() << std::endl;
 
 	RIV.resize(0);
 	VOVL.resize(0);
 }
-
-struct RepeatAdder
-{
-	typedef RepeatAdder this_type;
-	typedef libmaus2::util::unique_ptr<this_type>::type unique_ptr_type;
-	typedef libmaus2::util::shared_ptr<this_type>::type shared_ptr_type;
-
-	libmaus2::autoarray::AutoArray<Repeat> const & R;
-	libmaus2::dazzler::db::DatabaseFile const & DB;
-	RepeatIdComparator const comp;
-	int64_t const tspace;
-
-	libmaus2::lcs::NP np;
-	libmaus2::lcs::AlignmentTraceContainer ATC;
-
-	RepeatAdder(
-		libmaus2::autoarray::AutoArray<Repeat> const & rR,
-		libmaus2::dazzler::db::DatabaseFile const & rDB,
-		int64_t const rtspace
-	)
-	: R(rR), DB(rDB), comp(), tspace(rtspace)
-	{
-
-	}
-
-	void handle(libmaus2::dazzler::align::Overlap const & OVL, std::vector < libmaus2::math::IntegerInterval<int64_t> > & RIV)
-	{
-		// check whether B read has any marked repeats
-		std::pair<Repeat const *, Repeat const *> const P = ::std::equal_range(R.begin(),R.end(),Repeat(OVL.bread),comp);
-
-		if ( P.second != P.first )
-		{
-			// get read data
-			std::string const aread = DB.decodeRead(OVL.aread,false);
-			std::string const bread = DB.decodeRead(OVL.bread,OVL.isInverse());
-			char const * ac = aread.c_str();
-			char const * bc = bread.c_str();
-			uint8_t const * au = reinterpret_cast<uint8_t const *>(ac);
-			uint8_t const * bu = reinterpret_cast<uint8_t const *>(bc);
-			// compute trace
-			OVL.computeTrace(au,bu,tspace,ATC,np);
-
-			#if 0
-			libmaus2::lcs::AlignmentPrint::printAlignmentLines(
-				std::cerr,
-				aread.begin()+OVL.path.abpos,OVL.path.aepos-OVL.path.abpos,
-				bread.begin()+OVL.path.bbpos,OVL.path.bepos-OVL.path.bbpos,
-				80,
-				ATC.ta,
-				ATC.te
-			);
-			#endif
-
-			// get B interval
-			libmaus2::math::IntegerInterval<int64_t> IB(OVL.path.bbpos,OVL.path.bepos-1);
-
-			// iterate over repeats on B
-			for ( Repeat const * p = P.first; p != P.second; ++p )
-			{
-				// sanity check
-				assert ( static_cast<int64_t>(p->id) == OVL.bread );
-
-				// get position of repeat
-				uint64_t rb = p->abpos;
-				uint64_t re = p->aepos;
-
-				// rewrite repeat position if we are on revcomp
-				if ( OVL.isInverse() )
-				{
-					std::swap(rb,re);
-					rb = bread.size() - rb;
-					re = bread.size() - re;
-				}
-
-				// construct repeat interval
-				libmaus2::math::IntegerInterval<int64_t> IR(rb,re-1);
-
-				// if alignment touches repeat interval
-				if ( !IB.intersection(IR).isEmpty() )
-				{
-					// interval intersection between read and repeat
-					uint64_t bstart = std::max(static_cast<int64_t>(OVL.path.bbpos),static_cast<int64_t>(rb));
-					uint64_t bend = std::min(static_cast<int64_t>(re),static_cast<int64_t>(OVL.path.bepos));
-					bool const ok = bend > bstart;
-					if ( ! ok )
-					{
-						std::cerr << "bstart=" << bstart << " bend=" << bend << std::endl;
-						std::cerr << IR << std::endl;
-						std::cerr << IB << std::endl;
-						assert ( ok );
-					}
-					uint64_t bspan = bend-bstart;
-
-					// skip up to start of repeat region
-					uint64_t const bskip = static_cast<int64_t>(bstart) > OVL.path.bbpos ? bstart-OVL.path.bbpos : 0;
-
-					libmaus2::lcs::AlignmentTraceContainer::step_type const * ta = ATC.ta;
-					libmaus2::lcs::AlignmentTraceContainer::step_type const * const te = ATC.te;
-
-					std::pair<uint64_t,uint64_t> const Bskip = libmaus2::lcs::AlignmentTraceContainer::advanceB(ta,te,bskip);
-					assert ( Bskip.first == bskip );
-
-					// update position on A
-					uint64_t const astart = OVL.path.abpos + libmaus2::lcs::AlignmentTraceContainer::getStringLengthUsed(ta,ta+Bskip.second).first;
-					ta += Bskip.second;
-
-					// get length on repeat
-					std::pair<uint64_t,uint64_t> const Blen = libmaus2::lcs::AlignmentTraceContainer::advanceB(ta,te,bspan);
-					assert ( Blen.first == bspan );
-					uint64_t const aend = astart + libmaus2::lcs::AlignmentTraceContainer::getStringLengthUsed(ta,ta+Blen.second).first;
-
-					#if 0
-					if ( OVL.isInverse() )
-					{
-						std::string const asub = aread.substr(astart,aend-astart);
-						std::string const bsub = bread.substr(bstart,bend-bstart);
-
-						np.np(asub.begin(),asub.end(),bsub.begin(),bsub.end());
-
-						libmaus2::lcs::AlignmentPrint::printAlignmentLines(
-							std::cerr,
-							asub.begin(),
-							asub.size(),
-							bsub.begin(),
-							bsub.size(),
-							80,
-							np.ta,
-							np.te
-						);
-					}
-					#endif
-
-					//std::cerr << OVL.aread << " " << OVL.bread << " " << IB << " " << IR << " " << astart << "," << aend << " " << OVL.path.abpos << "," << OVL.path.aepos << std::endl;
-
-					// store repeat region in terms of positions on A read
-					RIV.push_back(libmaus2::math::IntegerInterval<int64_t>(astart,aend-1));
-				}
-			}
-		}
-
-	}
-};
 
 static uint64_t getDefaultNumThreads()
 {
@@ -632,27 +468,35 @@ int lasfilteralignmentsborderrepeats(libmaus2::util::ArgParser const & arg)
 	std::string const outfn = arg[0];
 	std::string const dbfn = arg[1];
 	std::string const repfn = arg[2];
-	std::string const infn = arg[3];
 
-	std::string const lasindexname = libmaus2::dazzler::align::OverlapIndexer::getIndexName(infn);
-	std::string const dalignerlasindexname = libmaus2::dazzler::align::DalignerIndexDecoder::getDalignerIndexName(infn);
+	std::vector < std::string > Vinfn;
+	for ( uint64_t i = 3; i < arg.size(); ++i )
+		Vinfn.push_back(arg[i]);
+	// std::string const infn = arg[3];
 
-	if (
-		! libmaus2::util::GetFileSize::fileExists(lasindexname)
-		||
-		libmaus2::util::GetFileSize::isOlder(lasindexname,infn)
-	)
+	for ( uint64_t i = 0; i < Vinfn.size(); ++i )
 	{
-		libmaus2::dazzler::align::OverlapIndexer::constructIndex(infn,&std::cerr);
-	}
+		std::string const infn = Vinfn[i];
+		std::string const lasindexname = libmaus2::dazzler::align::OverlapIndexer::getIndexName(infn);
+		std::string const dalignerlasindexname = libmaus2::dazzler::align::DalignerIndexDecoder::getDalignerIndexName(infn);
 
-	if (
-		! libmaus2::util::GetFileSize::fileExists(dalignerlasindexname)
-		||
-		libmaus2::util::GetFileSize::isOlder(dalignerlasindexname,infn)
-	)
-	{
-		libmaus2::dazzler::align::OverlapIndexer::constructIndex(infn,&std::cerr);
+		if (
+			! libmaus2::util::GetFileSize::fileExists(lasindexname)
+			||
+			libmaus2::util::GetFileSize::isOlder(lasindexname,infn)
+		)
+		{
+			libmaus2::dazzler::align::OverlapIndexer::constructIndex(infn,&std::cerr);
+		}
+
+		if (
+			! libmaus2::util::GetFileSize::fileExists(dalignerlasindexname)
+			||
+			libmaus2::util::GetFileSize::isOlder(dalignerlasindexname,infn)
+		)
+		{
+			libmaus2::dazzler::align::OverlapIndexer::constructIndex(infn,&std::cerr);
+		}
 	}
 
 
@@ -671,11 +515,14 @@ int lasfilteralignmentsborderrepeats(libmaus2::util::ArgParser const & arg)
 		return EXIT_FAILURE;
 	}
 
-	int64_t const tspace = libmaus2::dazzler::align::AlignmentFile::getTSpace(infn);
+	int64_t const tspace = libmaus2::dazzler::align::AlignmentFile::getTSpace(Vinfn);
 	DB.computeTrimVector();
 
 	std::vector<uint64_t> RL;
 	DB.getAllReadLengths(RL);
+
+	libmaus2::dazzler::align::LasIntervals LAI(Vinfn,DB.size(),std::cerr);
+	std::pair<int64_t,int64_t> const LAIint = LAI.getInterval();
 
 	libmaus2::dazzler::db::Track::unique_ptr_type const Ptrack(DB.readTrack("inqual",0));
 	libmaus2::dazzler::align::OverlapProperCheck const OPC(RL,*Ptrack,termval);
@@ -686,17 +533,26 @@ int lasfilteralignmentsborderrepeats(libmaus2::util::ArgParser const & arg)
 		IsProper::unique_ptr_type tptr(new IsProper(DB,OPC,tspace));
 		Aisproper[i] = UNIQUE_PTR_MOVE(tptr);
 	}
-	libmaus2::autoarray::AutoArray < RepeatAdder::unique_ptr_type > ARA(numthreads);
-	for ( uint64_t i = 0; i < numthreads; ++i )
-	{
-		RepeatAdder::unique_ptr_type tptr(new RepeatAdder(R,DB,tspace));
-		ARA[i] = UNIQUE_PTR_MOVE(tptr);
-	}
 
 	libmaus2::dazzler::align::AlignmentWriterArray::unique_ptr_type AWA(new libmaus2::dazzler::align::AlignmentWriterArray(tmpfilebase + "_simrep_tmp", numthreads, tspace));
 
-	int64_t minaread = libmaus2::dazzler::align::OverlapIndexer::getMinimumARead(infn);
-	int64_t maxaread = libmaus2::dazzler::align::OverlapIndexer::getMaximumARead(infn);
+	std::vector < std::string > Vsymkillfn(numthreads);
+	libmaus2::autoarray::AutoArray < libmaus2::aio::OutputStreamInstance::unique_ptr_type > Asymkill(numthreads);
+	for ( uint64_t i = 0; i < numthreads; ++i )
+	{
+		std::ostringstream ostr;
+		ostr << tmpfilebase << "_symkill_" << i << ".tmp";
+		std::string const fn = ostr.str();
+		Vsymkillfn[i] = fn;
+		libmaus2::util::TempFileRemovalContainer::addTempFile(fn);
+		libmaus2::aio::OutputStreamInstance::unique_ptr_type tptr(
+			new libmaus2::aio::OutputStreamInstance(fn)
+		);
+		Asymkill[i] = UNIQUE_PTR_MOVE(tptr);
+	}
+
+	int64_t minaread = LAIint.first;
+	int64_t maxaread = LAIint.second;
 
 	if ( maxaread < minaread )
 	{
@@ -815,46 +671,98 @@ int lasfilteralignmentsborderrepeats(libmaus2::util::ArgParser const & arg)
 
 	std::cerr << "[V] handling [" << minaread << "," << toparead << ")" << std::endl;
 
+	int volatile gfailed = 0;
+	libmaus2::parallel::PosixSpinLock gfailedlock;
+
 	#if defined(_OPENMP)
 	#pragma omp parallel for schedule(dynamic,1) num_threads(numthreads)
 	#endif
 	for ( int64_t r = minaread; r < toparead; ++r )
 	{
-		#if defined(_OPENMP)
-		uint64_t const tid = omp_get_thread_num();
-		#else
-		uint64_t const tid = 0;
-		#endif
-
-		IsProper & isproper = *(Aisproper[tid]);
-		RepeatAdder & RA = *(ARA[tid]);
-		libmaus2::dazzler::align::AlignmentWriter & AW = (*AWA)[tid];
-
-		libmaus2::dazzler::align::AlignmentFileRegion::unique_ptr_type Plas(libmaus2::dazzler::align::OverlapIndexer::openAlignmentFileRegion(infn,r,r+1));
-		libmaus2::dazzler::align::Overlap OVL;
-
-		std::vector < libmaus2::math::IntegerInterval<int64_t> > RIV;
-		std::vector < libmaus2::dazzler::align::Overlap > VOVL;
-
-		while ( Plas->getNextOverlap(OVL) )
+		try
 		{
-			RA.handle(OVL,RIV);
-			VOVL.push_back(OVL);
+			#if defined(_OPENMP)
+			uint64_t const tid = omp_get_thread_num();
+			#else
+			uint64_t const tid = 0;
+			#endif
+
+			IsProper & isproper = *(Aisproper[tid]);
+			libmaus2::dazzler::align::AlignmentWriter & AW = (*AWA)[tid];
+			std::ostream & symkill = *(Asymkill[tid]);
+
+			// libmaus2::dazzler::align::AlignmentFileRegion::unique_ptr_type Plas(libmaus2::dazzler::align::OverlapIndexer::openAlignmentFileRegion(infn,r,r+1));
+			libmaus2::dazzler::align::AlignmentFileCat::unique_ptr_type Plas(LAI.openRange(r,r+1));
+			libmaus2::dazzler::align::Overlap OVL;
+
+			std::vector < libmaus2::dazzler::align::Overlap > VOVL;
+
+			while ( Plas->getNextOverlap(OVL) )
+				VOVL.push_back(OVL);
+
+			if ( VOVL.size() )
+			{
+				// check whether A read has any marked repeats
+				RepeatIdComparator const rcomp;
+				std::pair<Repeat const *, Repeat const *> const P = ::std::equal_range(R.begin(),R.end(),Repeat(VOVL.front().aread),rcomp);
+				std::vector < libmaus2::math::IntegerInterval<int64_t> > RIV;
+				for ( Repeat const * p = P.first; p != P.second; ++p )
+				{
+					assert ( static_cast<int64_t>(p->id) == VOVL.front().aread );
+					RIV.push_back(libmaus2::math::IntegerInterval<int64_t>(p->abpos,p->aepos-1));
+				}
+
+				std::ostringstream err;
+				handle(err,R,DB,OPC,isproper,RIV,VOVL,VOVL.back().aread,lthres,AW,symkill,tspace,termval);
+
+				{
+					libmaus2::parallel::ScopePosixSpinLock slock(libmaus2::aio::StreamLock::cerrlock);
+					std::cerr << err.str();
+				}
+			}
 		}
-
-		if ( VOVL.size() )
+		catch(std::exception const & ex)
 		{
-			std::ostringstream err;
-			handle(err,R,DB,OPC,isproper,RIV,VOVL,VOVL.back().aread,lthres,AW,tspace,termval);
-
 			{
 				libmaus2::parallel::ScopePosixSpinLock slock(libmaus2::aio::StreamLock::cerrlock);
-				std::cerr << err.str();
+				std::cerr << ex.what() << std::endl;
 			}
+
+			gfailedlock.lock();
+			gfailed = 1;
+			gfailedlock.unlock();
 		}
 	}
 
-	AWA->merge(outfn,tmpfilebase + "_simrep_mergetmp");
+	if ( gfailed )
+	{
+		libmaus2::exception::LibMausException lme;
+		lme.getStream() << "[E] parallel processing loop failed" << std::endl;
+		lme.finish();
+		throw lme;
+	}
+
+	// AWA->merge(outfn,tmpfilebase + "_simrep_mergetmp",libmaus2::dazzler::align::SortingOverlapOutputBuffer<>::getDefaultMergeFanIn(),1);
+	AWA->merge(outfn,tmpfilebase + "_simrep_mergetmp",libmaus2::dazzler::align::SortingOverlapOutputBuffer<>::getDefaultMergeFanIn(),numthreads);
+
+	for ( uint64_t i = 0; i < numthreads; ++i )
+	{
+		Asymkill[i]->flush();
+		Asymkill[i].reset();
+	}
+
+	// merge sym files
+	std::string const symkillmerge = tmpfilebase + "_merge_symkill.tmp";
+	libmaus2::util::TempFileRemovalContainer::addTempFile(symkillmerge);
+
+	libmaus2::sorting::SerialisingSortingBufferedOutputFile<libmaus2::dazzler::align::OverlapInfo>::reduce(Vsymkillfn,symkillmerge);
+
+	for ( uint64_t i = 0; i < numthreads; ++i )
+		libmaus2::aio::FileRemoval::removeFile(Vsymkillfn[i]);
+
+	libmaus2::aio::OutputStreamFactoryContainer::rename(symkillmerge,outfn + ".sym");
+	libmaus2::dazzler::align::OverlapInfoIndexer::createInfoIndex(outfn + ".sym",DB.size());
+	libmaus2::dazzler::align::OverlapIndexer::constructIndex(outfn);
 
 	return EXIT_SUCCESS;
 }
