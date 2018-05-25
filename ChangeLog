@@ -1,3 +1,9 @@
+daccord (0.0.14-1) unstable; urgency=medium
+
+  * add bamfilterlongest and rlastobam
+
+ -- German Tischler <tischler@mpi-cbg.de>  Fri, 25 May 2018 10:53:34 +0200
+
 daccord (0.0.13-1) unstable; urgency=medium
 
   * check for matching tspace in checklas
