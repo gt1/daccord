@@ -15,6 +15,8 @@ noinst_HEADERS = \
 	Links.hpp \
 	Node.hpp \
 	OffsetLikely.hpp \
+	Repeat.hpp \
+	RepeatIdComparator.hpp \
 	TraceType.hpp
 
 MANPAGES = 
@@ -25,7 +27,8 @@ EXTRA_DIST = ${MANPAGES}
 
 bin_PROGRAMS = daccord computeintrinsicqv lasdetectsimplerepeats lasfilteralignments lasfilteralignmentsborderrepeats maftobam generateperfectpiles bamidrename \
 	checklas checkconsensus sortfasta mapconstoraw fillfasta canutolas spikenoise computeextrinsicqv marktrue encodegraph \
-	split_agr split_dis filterchains wgsimtobam rlastobam bamfilterlongest
+	split_agr split_dis filterchains wgsimtobam rlastobam bamfilterlongest computeintrinsicqv2 filtersym wmap
+
 
 daccord_SOURCES = daccord.cpp
 daccord_LDADD = ${LIBMAUS2LIBS}
@@ -146,3 +149,18 @@ bamfilterlongest_SOURCES = bamfilterlongest.cpp
 bamfilterlongest_LDADD = ${LIBMAUS2LIBS}
 bamfilterlongest_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
 bamfilterlongest_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+computeintrinsicqv2_SOURCES = computeintrinsicqv2.cpp
+computeintrinsicqv2_LDADD = ${LIBMAUS2LIBS}
+computeintrinsicqv2_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+computeintrinsicqv2_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+filtersym_SOURCES = filtersym.cpp
+filtersym_LDADD = ${LIBMAUS2LIBS}
+filtersym_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+filtersym_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
+
+wmap_SOURCES = wmap.cpp
+wmap_LDADD = ${LIBMAUS2LIBS}
+wmap_LDFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS} ${LIBMAUS2LDFLAGS}
+wmap_CPPFLAGS = ${AM_CPPFLAGS} ${LIBMAUS2CPPFLAGS}
