@@ -537,14 +537,12 @@ computeextrinsicqv
 
 computeextrinsicqv produces a Dazzler database track providing the edit
 distance between a source read and the consensus produced for that read
-for each block of size tspace on the source read. It has three mandatory and
-one optional argument. The mandatory arguments are a reads file in FastA
-format, a consensus file (as produced by daccord) in FastA format and the
-name of a Dazzler database (.db/.dam) file. The fourth and optional argument
-can be used to provide a Dazzler block number in case the two FastA files
-represent a block of the database used. A valid example would be
+for each block of size tspace on the source read. It has two mandatory
+arguments. The mandatory arguments are a consensus file (as produced by daccord)
+in FastA format and the name of a Dazzler database (.db/.dam) file.
+A valid example would be
 
-	computeextrinsicqv data_fcgr/reads.fasta data_fcgr/reads_cons.fasta data_fcgr/reads.dam
+	computeextrinsicqv data_fcgr/reads_cons.fasta data_fcgr/reads.dam
 
 split_agr
 ---------
